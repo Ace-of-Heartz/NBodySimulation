@@ -43,6 +43,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
         GLEW::glew
         SDL2_image::SDL2_image
         GLU
+        imgui::imgui
 
 )
 
