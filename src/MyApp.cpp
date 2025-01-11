@@ -6,11 +6,31 @@
 
 #include <GL/glu.h>
 #include <math.h>
+#include <random>
+#include <glm/ext/scalar_constants.hpp>
+#include <glm/gtc/constants.hpp>
+
 #include "oclutils.hpp"
+
+
+
+void CMyApp::SetupDebugCallback()
+{
+	GLint context_flags;
+	glGetIntegerv(GL_CONTEXT_FLAGS, &context_flags);
+	if (context_flags & GL_CONTEXT_FLAG_DEBUG_BIT) {
+		glEnable(GL_DEBUG_OUTPUT);
+		glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+		glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DEBUG_SEVERITY_NOTIFICATION, 0, nullptr, GL_FALSE);
+		glDebugMessageControl(GL_DONT_CARE, GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR, GL_DONT_CARE, 0, nullptr, GL_FALSE);
+		glDebugMessageCallback(SDL_GLDebugMessageCallback, nullptr);
+	}
+}
 
 
 bool CMyApp::InitGL()
 {
+	SetupDebugCallback();
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);

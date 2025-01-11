@@ -65,8 +65,10 @@ enum MassDistr
 class CMyApp
 {
 public:
-	CMyApp(void);
-	~CMyApp(void);
+	CMyApp();
+	~CMyApp();
+
+	void SetupDebugCallback();
 
 	bool InitMisc();
 	bool InitGL();
