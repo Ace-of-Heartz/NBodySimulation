@@ -1,4 +1,5 @@
 #include "MyApp.h"
+#include "SDL_GLDebugMessageCallback.h"
 
 #include <imgui.h>
 
@@ -6,11 +7,31 @@
 
 #include <GL/glu.h>
 #include <math.h>
+#include <random>
+#include <glm/ext/scalar_constants.hpp>
+#include <glm/gtc/constants.hpp>
+
 #include "oclutils.hpp"
+
+
+
+void CMyApp::SetupDebugCallback()
+{
+	GLint context_flags;
+	glGetIntegerv(GL_CONTEXT_FLAGS, &context_flags);
+	if (context_flags & GL_CONTEXT_FLAG_DEBUG_BIT) {
+		glEnable(GL_DEBUG_OUTPUT);
+		glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+		glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DEBUG_SEVERITY_NOTIFICATION, 0, nullptr, GL_FALSE);
+		glDebugMessageControl(GL_DONT_CARE, GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR, GL_DONT_CARE, 0, nullptr, GL_FALSE);
+		glDebugMessageCallback(SDL_GLDebugMessageCallback, nullptr);
+	}
+}
 
 
 bool CMyApp::InitGL()
 {
+	SetupDebugCallback();
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
@@ -97,7 +118,7 @@ bool CMyApp::InitCL()
 		program = cl::Program(context, source);
 		try {
 			program.build(devices);
-		} catch (cl::Error error) {
+		} catch (cl::Error& error) {
 			std::cout << program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(devices[0]) << std::endl;
 			throw error;
 		}
@@ -107,90 +128,165 @@ bool CMyApp::InitCL()
 		
 		// Create Mem Objs
 		cl_vbo_mem = cl::BufferGL(context, CL_MEM_WRITE_ONLY, vbo);
-		cl_v = cl::Buffer(context, CL_MEM_READ_WRITE, num_particles * sizeof(float) * 2);
+		cl_v = cl::Buffer(context, CL_MEM_READ_WRITE, num_particles * sizeof(float) * 3);
 		cl_m = cl::Buffer(context, CL_MEM_READ_WRITE, num_particles * sizeof(float));
 
 		///////////////////////////
 		// Set-up the simulation //
 		///////////////////////////
 
-		/// set masses
-
-		std::vector<float> masses(num_particles, 1);
-		masses[rand() % masses.size()] = massiveObjectMass;
-		command_queue.enqueueWriteBuffer(cl_m, CL_TRUE, 0, num_particles * sizeof(float), &masses[0]);
-
-		/// set initial velocities
-
-		std::vector<float> vectors(num_particles*2, 0);
-		if(bRandVelocities)
-		{
-			// random velocities
-			for (size_t i = 0; i < vectors.size(); i += 2)
-			{
-				double t = i / double(vectors.size() / 2) * (2 * M_PI);
-				double st = sin(t);
-				double ct = cos(t);
-				double v = 1.7;
-				vectors[i + 0] = -ct * v;
-				vectors[i + 1] = st * v;
-			}
-		}
-
-		command_queue.enqueueWriteBuffer(cl_v, CL_TRUE, 0, num_particles * sizeof(float) * 2, &vectors[0]);
-
-		/// set initial positions
-
-		for (size_t i = 0; i < vectors.size(); ++i)
-		{
-			vectors[i] = ((rand() / float(RAND_MAX)) * 2 - 1);
-		}
-
-		if(bRing)
-		{
-			auto rand_1_1 = []() {
-				return (rand() / float(RAND_MAX)) * 2 - 1; 
-			};
-
-			// points positioned in a ring
-			for (size_t i = 0; i < vectors.size(); i+=2)
-			{
-				double t = i / double(vectors.size() / 2) * (2 * M_PI);
-				double st = sin(t);
-				double ct = cos(t);
-				double r = 0.25;
-				vectors[i + 0] = r * st + rand_1_1() / 5.0;
-				vectors[i + 1] = r * ct + rand_1_1() / 5.0;
-			}
-		}
-		
-		// positions: upload to GPU global memory using OpenGL
-		glBindBuffer(GL_ARRAY_BUFFER, vbo);
-		float* values = static_cast<float*>(glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY));
-		for (size_t i = 0; i < vectors.size(); ++i)
-			values[i] = vectors[i];
-		glUnmapBuffer(GL_ARRAY_BUFFER);
-		glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-		// kernel args
-		kernel_update.setArg(0, cl_v);			// velocities
-		kernel_update.setArg(1, cl_vbo_mem);	// positions
-		kernel_update.setArg(2, cl_m);			// masses
+		InitObjectMass();
+		InitObjectPositionNVelocity();
+		kernel_update.setArg(0, cl_v);
+		kernel_update.setArg(1, cl_vbo_mem);
+		kernel_update.setArg(2, cl_m);
 	}
-	catch (cl::Error error)
+	catch (cl::Error& error)
 	{
-		// std::cout << error.what() << "(" << oclErrorString(error.err()) << ")" << std::endl;
-		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "%s", error.what());
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "%s (%s)", error.what(),oclErrorString(error.err()));
 		return false;
 	}
 	return true;
 }
 
+
+bool CMyApp::InitObjectMass()
+{
+
+	std::random_device rd{};
+	std::mt19937 gen{ rd() };
+	std::normal_distribution d(mass_normal.mean,mass_normal.deviation );
+
+	std::vector<float> masses; masses.resize(num_particles,1.0);
+
+
+	for (size_t i = 0; i < num_particles; ++i)
+	{
+		masses[i] = d(gen);
+	}
+
+	for (int i = 0; i < num_massive_particles; ++i)
+	{
+		masses[rand() % masses.size()] = massive_particle_mass;
+	}
+
+	const cl_int res = command_queue.enqueueWriteBuffer(cl_m,CL_TRUE,0,num_particles*sizeof(float),&masses[0]);
+	CL_CHECK(res);
+	return true;
+}
+
+
+
+bool CMyApp::InitObjectPositionNVelocity()
+{
+	std::vector<float> attributes;
+	attributes.resize(num_particles * 3,1.0);
+
+	// attributes.resize(num_particles * 3,1.0);
+	switch (position_distr)
+	{
+	case SPHERE_POS:
+		{
+			const float r = 0.25;
+			float idx = -static_cast<float>(attributes.size()) / 2.0f;
+			const auto N = static_cast<float>(attributes.size());
+			for(size_t i = 0; i < attributes.size(); i +=3)
+			{
+				auto lat = glm::asin( (idx * 2.0f) /(2.0f * N + 1.0f));
+				auto lon = 2.0f * glm::pi<float>() * idx / glm::golden_ratio<float>();
+
+				// attribute = glm::vec3(r * sin(lat) * sin(lon), r * cos(lon) , r * cos(lat) * sin(lon));
+				attributes[i] = r * sin(lat) * sin(lon);
+				attributes[i + 1] = r * cos(lon);
+				attributes[i + 2] = r * cos(lat) * sin(lon);
+				// attributes[i + 2] = 0.0;
+				idx += 1.0f;
+			}
+		}
+		break;
+	case UNIFORM_POS:
+		{
+			std::random_device rd{};
+			std::mt19937 gen{ rd() };
+			std::normal_distribution d(0.0,1.0 );			for ( auto & attribute : attributes)
+			{
+				// attribute = glm::vec3(
+				// 	d(gen),
+				// 	d(gen),
+				// 	d(gen)
+				// 	);
+			}
+		}
+		break;
+	}
+
+
+	glBindBuffer(GL_ARRAY_BUFFER, vbo);
+	auto* values = static_cast<float*>(glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY));
+	for (size_t i = 0; i < attributes.size(); ++i)
+		values[i] = attributes[i];
+	glUnmapBuffer(GL_ARRAY_BUFFER);
+	glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+	switch (vel_distr)
+	{
+	case RANDOM_VEL:
+		{
+
+		}
+		break;
+	case STARTING_OUT_VEL:
+		{
+			// for (size_t i = 0; i < attributes.size(); ++i)
+			// {
+			// 	attributes[i] = normalize(attributes[i]) * starting_velocity;
+			//
+			// }
+		}
+		break;
+	case STARTING_IN_VEL:
+		{
+			for (size_t i = 0; i < attributes.size(); i += 3)
+			{
+				// attributes[i] = glm::normalize(attributes[i]) * starting_velocity * -1.0f;
+
+				auto vel = glm::vec3(attributes[i],attributes[i + 1],attributes[i + 2]) ;
+				vel = glm::normalize(vel)   * -1.0f;
+				attributes[i] = vel.x;
+				attributes[i + 1] = vel.y;
+				attributes[i + 2] = vel.z;
+			}
+		}
+		break;
+	case FUNC_ZERO_VEL:
+		{
+			// for (size_t i = 0; i < attributes.size(); ++i)
+			// {
+			// 	attributes[i] = glm::vec3(glm::epsilon<float>());
+			// }
+
+		}
+		break;
+	}
+
+	auto res = command_queue.enqueueWriteBuffer(cl_v, CL_TRUE, 0, num_particles * sizeof(float) * 3, &attributes[0]);
+	CL_CHECK(res);
+
+	return true;
+}
+
+
+
+
 bool CMyApp::InitMisc()
 {
-	start_time = std::chrono::system_clock::now();
 	simulation_elapsed_time = 0;
 	return true;
+}
+
+void CMyApp::CleanGL()
+{
+
 }
 
 
@@ -257,8 +353,7 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 		command_queue.enqueueReleaseGLObjects(&acquirable);
 
 	} catch (cl::Error error) {
-		// std::cout << error.what() << "(" << oclErrorString(error.err()) << ")" << std::endl;
-		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,"%s", error.what());
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,"%s (%s)", error.what(),oclErrorString(error.err()) );
 		exit(1);
 	}
 }
@@ -267,7 +362,7 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 
 #pragma region Render (GL)
 
-void CMyApp::renderVBO( int vbolen )
+void CMyApp::RenderVBO( int vbolen )
 {
 	m_program.On();
 	{
@@ -276,7 +371,7 @@ void CMyApp::renderVBO( int vbolen )
 		m_program.SetTexture("tex0", 0, m_textureID);
 
 		glBindBuffer(GL_ARRAY_BUFFER, vbo);
-		glVertexPointer(2, GL_FLOAT, 0, 0);
+		glVertexPointer(3, GL_FLOAT, 0, 0);
 		glEnableClientState(GL_VERTEX_ARRAY);
 
 		glDrawArrays(GL_POINTS, 0, vbolen);
@@ -290,14 +385,13 @@ void CMyApp::renderVBO( int vbolen )
 
 void CMyApp::Render()
 {
-	// t�r�lj�k a frampuffert (GL_COLOR_BUFFER_BIT) �s a m�lys�gi Z puffert (GL_DEPTH_BUFFER_BIT)
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 	
 	glDisable(GL_DEPTH_TEST);	
 	glDepthMask(GL_FALSE);
 
 	// GL
-	renderVBO( num_particles );
+	RenderVBO( num_particles );
 }  
 
 void CMyApp::RenderGUI()

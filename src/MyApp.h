@@ -41,7 +41,7 @@ struct SUpdateInfo
 
 enum PositionDistr
 {
-	RING_POS,
+	SPHERE_POS,
 	UNIFORM_POS,
 };
 
@@ -53,28 +53,27 @@ enum VelocityDistr
 	FUNC_ZERO_VEL
 };
 
-enum MassDistr
+struct NormalDistribution
 {
-	BLACKHOLE_MASS,
-	UNIFORM_MASS,
-	EQUAL_MASS,
-	RANDOM_MASS
+	float mean;
+	float deviation;
 };
 
 
 class CMyApp
 {
 public:
-	CMyApp(void);
-	~CMyApp(void);
+	CMyApp();
+	~CMyApp();
+
+	void SetupDebugCallback();
 
 	bool InitMisc();
 	bool InitGL();
 	bool InitCL();
 
 	void Clean();
-	void CleanGL();
-	void CleanCL();
+
 
 	void Update(const SUpdateInfo&);
 	void Render();
@@ -90,10 +89,15 @@ public:
 	void Resize(int, int);
 protected:
 
+	bool InitObjectMass();
+	bool InitObjectPositionNVelocity();
+
+	void CleanGL();
+	void CleanCL();
 	// GL
 	int windowH, windowW;
 	GLuint m_vaoID, vbo, texture;
-	void renderVBO( int vbolen );
+	void RenderVBO( int vbolen );
 
 	// CL
 	cl::Context context;
@@ -107,7 +111,6 @@ protected:
 
 	float delta_time;
 	float simulation_elapsed_time = 0;
-	std::chrono::time_point<std::chrono::high_resolution_clock> start_time;
 
 	float speed_mult = 1.0;
 	int num_particles = 25000;
@@ -115,16 +118,17 @@ protected:
 
 
 	float particle_size = 0.01f;
-	const bool bRing = true;
-	const bool bRandVelocities = true;
-
-	PositionDistr position_distr;
-	VelocityDistr vel_distr;
-	MassDistr mass_distr;
 
 
+	PositionDistr position_distr = SPHERE_POS;
+	VelocityDistr vel_distr = STARTING_IN_VEL;
+	NormalDistribution mass_normal = NormalDistribution(0.5,0.2);
 
-	const float massiveObjectMass = 1;
+
+	int num_massive_particles = 0;
+	float massive_particle_mass = 1;
+	float starting_velocity;
+
 
 #pragma region GL functions
 
@@ -139,7 +143,7 @@ protected:
 
 		// bind the buffer
 		glBindBuffer(GL_ARRAY_BUFFER, vbo_buffer);
-		glBufferData(GL_ARRAY_BUFFER, vbolen*sizeof(float)*2, 0, GL_DYNAMIC_DRAW);
+		glBufferData(GL_ARRAY_BUFFER, vbolen*sizeof(float) * 3, 0, GL_DYNAMIC_DRAW);
 		glBindBuffer(GL_ARRAY_BUFFER, 0); 
 
 		return vbo_buffer;

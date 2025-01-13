@@ -21,6 +21,8 @@
 
 #pragma region Misc
 
+#define CL_CHECK(ERR_INT) {if (ERR_INT != CL_SUCCESS) { throw cl::Error(ERR_INT);};}
+
 inline std::string oclReadSourcesFromFile( const char *file_name )
 {
 	// Read source file
