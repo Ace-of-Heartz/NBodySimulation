@@ -16,6 +16,9 @@
 #include <fstream>
 #include <sstream>
 
+#include "Camera.h"
+#include "CameraManipulator.h"
+
 //#define CL_HPP_NO_STD_VECTOR
 #define CL_HPP_ENABLE_EXCEPTIONS
 #define CL_HPP_ENABLE_PROGRAM_CONSTRUCTION_FROM_ARRAY_COMPATIBILITY
@@ -72,6 +75,8 @@ public:
 	bool InitGL();
 	bool InitCL();
 
+	void InitParticles();
+
 	void Clean();
 
 
@@ -99,6 +104,12 @@ protected:
 	GLuint m_vaoID, vbo, texture;
 	void RenderVBO( int vbolen );
 
+	// Camera
+	Camera m_camera;
+	CameraManipulator m_cameraManipulator;
+
+
+
 	// CL
 	cl::Context context;
 	cl::CommandQueue command_queue;
@@ -117,17 +128,18 @@ protected:
 	float gravitational_constant = 6.67e-11;
 
 
-	float particle_size = 0.01f;
+	float particle_size = 0.05f;
 
 
 	PositionDistr position_distr = SPHERE_POS;
-	VelocityDistr vel_distr = STARTING_IN_VEL;
+	VelocityDistr vel_distr = FUNC_ZERO_VEL;
 	NormalDistribution mass_normal = NormalDistribution(0.5,0.2);
 
 
-	int num_massive_particles = 0;
-	float massive_particle_mass = 1;
-	float starting_velocity;
+	int num_massive_particles = 3;
+	float massive_particle_mass = 2;
+	float starting_velocity = 1.0f;
+	float starting_volume_radius = 0.5f;
 
 
 #pragma region GL functions
@@ -143,7 +155,7 @@ protected:
 
 		// bind the buffer
 		glBindBuffer(GL_ARRAY_BUFFER, vbo_buffer);
-		glBufferData(GL_ARRAY_BUFFER, vbolen*sizeof(float) * 3, 0, GL_DYNAMIC_DRAW);
+		glBufferData(GL_ARRAY_BUFFER, vbolen*sizeof(float) * 4, 0, GL_DYNAMIC_DRAW);
 		glBindBuffer(GL_ARRAY_BUFFER, 0); 
 
 		return vbo_buffer;
