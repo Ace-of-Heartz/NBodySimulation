@@ -54,6 +54,12 @@ bool CMyApp::InitGL()
 	// Load texture
 	m_textureID = TextureFromFile("../assets/particle.png");
 
+	m_camera.SetView(
+	glm::vec3(0.0, 0.0, 9.0),
+	glm::vec3(0.0, 0.0, 0.0),
+	glm::vec3(0.0, 1.0, 0.0));
+	m_cameraManipulator.SetCamera( &m_camera );
+
 	return true;
 }
 
@@ -126,9 +132,19 @@ bool CMyApp::InitCL()
 		// Make kernel
 		kernel_update = cl::Kernel(program, "update");
 		
-		// Create Mem Objs
+		InitParticles();
+	}
+	catch (cl::Error& error)
+	{
+		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "%s (%s)", error.what(),oclErrorString(error.err()));
+		return false;
+	}
+	return true;
+}
+
+void CMyApp::InitParticles(){
 		cl_vbo_mem = cl::BufferGL(context, CL_MEM_WRITE_ONLY, vbo);
-		cl_v = cl::Buffer(context, CL_MEM_READ_WRITE, num_particles * sizeof(float) * 3);
+		cl_v = cl::Buffer(context, CL_MEM_READ_WRITE, num_particles * sizeof(float) * 4);
 		cl_m = cl::Buffer(context, CL_MEM_READ_WRITE, num_particles * sizeof(float));
 
 		///////////////////////////
@@ -140,15 +156,7 @@ bool CMyApp::InitCL()
 		kernel_update.setArg(0, cl_v);
 		kernel_update.setArg(1, cl_vbo_mem);
 		kernel_update.setArg(2, cl_m);
-	}
-	catch (cl::Error& error)
-	{
-		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION, "%s (%s)", error.what(),oclErrorString(error.err()));
-		return false;
-	}
-	return true;
 }
-
 
 bool CMyApp::InitObjectMass()
 {
@@ -180,26 +188,31 @@ bool CMyApp::InitObjectMass()
 bool CMyApp::InitObjectPositionNVelocity()
 {
 	std::vector<float> attributes;
-	attributes.resize(num_particles * 3,1.0);
+	attributes.resize(num_particles * 4,1.0);
 
-	// attributes.resize(num_particles * 3,1.0);
 	switch (position_distr)
 	{
 	case SPHERE_POS:
 		{
-			const float r = 0.25;
 			float idx = -static_cast<float>(attributes.size()) / 2.0f;
 			const auto N = static_cast<float>(attributes.size());
-			for(size_t i = 0; i < attributes.size(); i +=3)
+			for(size_t i = 0; i < attributes.size(); i +=4)
 			{
-				auto lat = glm::asin( (idx * 2.0f) /(2.0f * N + 1.0f));
-				auto lon = 2.0f * glm::pi<float>() * idx / glm::golden_ratio<float>();
-
+				auto lat = glm::asin( (idx * 2.0f) /(2.0f * N + 1.0f)) * 180.0f / glm::pi<float>();
+				//auto lon = 2.0f * glm::pi<float>() * idx / glm::golden_ratio<float>();
+				float temp;
+				auto lon = glm::modf(idx / glm::golden_ratio<float>(),temp) * 360.0f / glm::golden_ratio<float>();
 				// attribute = glm::vec3(r * sin(lat) * sin(lon), r * cos(lon) , r * cos(lat) * sin(lon));
-				attributes[i] = r * sin(lat) * sin(lon);
-				attributes[i + 1] = r * cos(lon);
-				attributes[i + 2] = r * cos(lat) * sin(lon);
-				// attributes[i + 2] = 0.0;
+
+				if (lon < -180.0f) lon += 360.0f;
+				else if (lon > 180.0f) lon -= 360.0f;
+
+
+				attributes[i] = starting_volume_radius * sin(lat) * sin(lon);
+				attributes[i + 1] = starting_volume_radius * cos(lon);
+				attributes[i + 2] = starting_volume_radius * cos(lat) * sin(lon);
+				attributes[i + 3] = 1.0;
+
 				idx += 1.0f;
 			}
 		}
@@ -208,13 +221,10 @@ bool CMyApp::InitObjectPositionNVelocity()
 		{
 			std::random_device rd{};
 			std::mt19937 gen{ rd() };
-			std::normal_distribution d(0.0,1.0 );			for ( auto & attribute : attributes)
+			std::normal_distribution d(0.0,0.5 );
+			for (size_t i = 0; i < attributes.size(); i += 4)
 			{
-				// attribute = glm::vec3(
-				// 	d(gen),
-				// 	d(gen),
-				// 	d(gen)
-				// 	);
+				attributes[i] += d(gen); attributes[i + 1] += d(gen); attributes[i + 2] += d(gen); attributes[i + 3] += d(gen);
 			}
 		}
 		break;
@@ -237,39 +247,46 @@ bool CMyApp::InitObjectPositionNVelocity()
 		break;
 	case STARTING_OUT_VEL:
 		{
-			// for (size_t i = 0; i < attributes.size(); ++i)
-			// {
-			// 	attributes[i] = normalize(attributes[i]) * starting_velocity;
-			//
-			// }
+			for (size_t i = 0; i < attributes.size(); i += 4)
+			{
+
+				auto vel = glm::vec3(attributes[i],attributes[i + 1],attributes[i + 2]) ;
+				vel = glm::normalize(vel)  * starting_velocity *  1.0f;
+				attributes[i] = vel.x;
+				attributes[i + 1] = vel.y;
+				attributes[i + 2] = vel.z;
+				attributes[i + 3] = 0.0f;
+			}
 		}
 		break;
 	case STARTING_IN_VEL:
 		{
-			for (size_t i = 0; i < attributes.size(); i += 3)
+			for (size_t i = 0; i < attributes.size(); i += 4)
 			{
-				// attributes[i] = glm::normalize(attributes[i]) * starting_velocity * -1.0f;
-
-				auto vel = glm::vec3(attributes[i],attributes[i + 1],attributes[i + 2]) ;
-				vel = glm::normalize(vel)   * -1.0f;
+				auto vel = glm::vec3(attributes[i],attributes[i + 1],attributes[i + 2]);
+				vel = glm::normalize(vel) * starting_velocity  * -1.0f;
 				attributes[i] = vel.x;
 				attributes[i + 1] = vel.y;
 				attributes[i + 2] = vel.z;
+				attributes[i + 3] = 0.0f;
 			}
 		}
 		break;
 	case FUNC_ZERO_VEL:
 		{
-			// for (size_t i = 0; i < attributes.size(); ++i)
-			// {
-			// 	attributes[i] = glm::vec3(glm::epsilon<float>());
-			// }
+			for (size_t i = 0; i < attributes.size(); i += 4)
+			{
+				attributes[i] = glm::epsilon<float>();
+				attributes[i + 1] = glm::epsilon<float>();
+				attributes[i + 2] = glm::epsilon<float>();
+				attributes[i + 3] = 0.0f;
+			}
 
 		}
 		break;
 	}
 
-	auto res = command_queue.enqueueWriteBuffer(cl_v, CL_TRUE, 0, num_particles * sizeof(float) * 3, &attributes[0]);
+	auto res = command_queue.enqueueWriteBuffer(cl_v, CL_TRUE, 0, num_particles * sizeof(float) * 4, &attributes[0]);
 	CL_CHECK(res);
 
 	return true;
@@ -286,7 +303,16 @@ bool CMyApp::InitMisc()
 
 void CMyApp::CleanGL()
 {
+	m_cameraManipulator.RemoveCamera();
 
+	if( vbo != 0 )
+	{
+		glBindBuffer(GL_ARRAY_BUFFER_ARB, vbo);
+		glDeleteBuffers(1, &vbo);
+	}
+
+	glDeleteTextures(1, &m_textureID);
+	m_program.Clean();
 }
 
 
@@ -298,6 +324,8 @@ void CMyApp::CleanCL()
 	program = nullptr;
 	kernel_update = nullptr;
 	command_queue = nullptr;
+
+
 }
 
 
@@ -305,26 +333,21 @@ void CMyApp::Clean()
 {
 
 	CleanCL();
+	CleanGL();
 	// after we have released the OpenCL references, we can delete the underlying OpenGL objects
-	if( vbo != 0 )
-	{
-		glBindBuffer(GL_ARRAY_BUFFER_ARB, vbo);
-		glDeleteBuffers(1, &vbo);
-	}
 
-	glDeleteTextures(1, &m_textureID);
-	m_program.Clean();
 }
 
 #pragma region Update (CL)
 
 void CMyApp::Update(const SUpdateInfo& update_info)
 {
-	// static Uint32 last_time = SDL_GetTicks();
+
+	m_cameraManipulator.Update(update_info.DeltaTimeInSec);
 
 
 	delta_time = update_info.DeltaTimeInSec;
-	if (delta_time > 0.05f) delta_time = 0.05f;
+	if (delta_time > 0.005f) delta_time = 0.005f;
 	if (delta_time < 0.0001f) delta_time = 0.0001f;
 	// if (delta_time > 0.1f) delta_time = 0.1f;
 
@@ -367,11 +390,16 @@ void CMyApp::RenderVBO( int vbolen )
 	m_program.On();
 	{
 		// Shader program parameters
+		auto viewProj = m_camera.GetViewProj();
 		m_program.SetUniform("particle_size", particle_size);
+		m_program.SetUniform("viewProj",viewProj);
 		m_program.SetTexture("tex0", 0, m_textureID);
 
+
+		// glProgramUniformMatrix4fv(m_program)
+
 		glBindBuffer(GL_ARRAY_BUFFER, vbo);
-		glVertexPointer(3, GL_FLOAT, 0, 0);
+		glVertexPointer(4, GL_FLOAT, 0, 0);
 		glEnableClientState(GL_VERTEX_ARRAY);
 
 		glDrawArrays(GL_POINTS, 0, vbolen);
@@ -437,12 +465,32 @@ void CMyApp::RenderGUI()
 
 			if(ImGui::Button("Restart"))
 			{
-				Clean();
+				//Clean();
 				num_particles = next_num_particles;
 
-				InitGL();
-				InitCL();
-				InitMisc();
+				if(vbo){
+					glBindBuffer(GL_ARRAY_BUFFER, vbo);
+					glBufferData(GL_ARRAY_BUFFER, num_particles*sizeof(float) * 4, 0, GL_DYNAMIC_DRAW);
+					glBindBuffer(GL_ARRAY_BUFFER, 0);
+				}
+
+				InitParticles();
+				//if (!InitGL() )
+				//{
+				//	throw std::runtime_error("Failed to initialize OpenGL context");
+				//}
+				//if (!InitCL())
+				//{
+				//	throw std::runtime_error("Failed to initialize CL context");
+				//}
+				//if (!InitMisc())
+				//{
+				//	throw std::runtime_error("Failed to initialize Misc");
+				//}
+
+				//InitGL();
+				//InitCL();
+				//InitMisc();
 			}
 
 			ImGui::Separator();
@@ -547,14 +595,17 @@ void CMyApp::RenderGUI()
 
 void CMyApp::KeyboardDown(SDL_KeyboardEvent& key)
 {
+	m_cameraManipulator.KeyboardDown( key );
 }
 
 void CMyApp::KeyboardUp(SDL_KeyboardEvent& key)
 {
+	m_cameraManipulator.KeyboardUp( key );
 }
 
 void CMyApp::MouseMove(SDL_MouseMotionEvent& mouse)
 {
+	m_cameraManipulator.MouseMove( mouse );
 }
 
 void CMyApp::MouseDown(SDL_MouseButtonEvent& mouse)
@@ -567,6 +618,8 @@ void CMyApp::MouseUp(SDL_MouseButtonEvent& mouse)
 
 void CMyApp::MouseWheel(SDL_MouseWheelEvent& wheel)
 {
+
+	m_cameraManipulator.MouseWheel(wheel);
 }
 
 // a k�t param�terbe az �j ablakm�ret sz�less�ge (_w) �s magass�ga (_h) tal�lhat�
@@ -575,6 +628,8 @@ void CMyApp::Resize(int _w, int _h)
 	glViewport(0, 0, _w, _h);
 	windowH = _h;
 	windowW = _w;
+
+	m_camera.SetAspect(static_cast<float>(_w) / _h);
 }
 
 void CMyApp::OtherEvent(SDL_Event&)
