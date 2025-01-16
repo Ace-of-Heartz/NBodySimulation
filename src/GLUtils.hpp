@@ -131,9 +131,9 @@ GLuint TextureFromFile(const char* filename)
 
 	#if SDL_BYTEORDER == SDL_LIL_ENDIAN
 		if ( loaded_img->format->BytesPerPixel == 4 )
-			img_mode = GL_BGRA;
+			img_mode = GL_RGBA;
 		else
-			img_mode = GL_BGR;
+			img_mode = GL_RGB;
 	#else
 		if ( loaded_img->format->BytesPerPixel == 4 )
 			img_mode = GL_RGBA;
