@@ -4,7 +4,9 @@ __kernel void update(
 	__global float4 *v, // state: speed
 	__global float4 *p, // state: position
 	__global float *m,  // mass
-	float dt)		   // delta time (time between frames)
+	float dt, // delta time (time between frames)
+	float G // gravitational constant
+	)
 {
 
 	// Numerical integration for speed and distance
@@ -20,7 +22,6 @@ __kernel void update(
 	//
 	// (Tip: add a small constant to divisor to avoid numerical errors!)
 
-	const float G = 0.0001f; // gravitational constant
 
 	int gid = get_global_id(0);
     float4 p_gid = p[gid];

@@ -18,6 +18,8 @@
 
 #include "Camera.h"
 #include "CameraManipulator.h"
+#include "SimulationConfig.h"
+#include "SimulationUIConfig.h"
 
 //#define CL_HPP_NO_STD_VECTOR
 #define CL_HPP_ENABLE_EXCEPTIONS
@@ -36,30 +38,11 @@
 #include <GL/glx.h>
 #endif
 
+
 struct SUpdateInfo
 {
 	float ElapsedTimeInSec = 0.0f; // Program indulása óta eltelt idő
 	float DeltaTimeInSec   = 0.0f; // Előző Update óta eltelt idő
-};
-
-enum PositionDistr
-{
-	SPHERE_POS,
-	UNIFORM_POS,
-};
-
-enum VelocityDistr
-{
-	RANDOM_VEL,
-	STARTING_OUT_VEL,
-	STARTING_IN_VEL,
-	FUNC_ZERO_VEL
-};
-
-struct NormalDistribution
-{
-	float mean;
-	float deviation;
 };
 
 
@@ -104,6 +87,8 @@ protected:
 	GLuint m_vaoID, vbo, texture;
 	void RenderVBO( int vbolen );
 
+	void LoadTexture(const std::string&);
+
 	// Camera
 	Camera m_camera;
 	CameraManipulator m_cameraManipulator;
@@ -123,24 +108,29 @@ protected:
 	float delta_time;
 	float simulation_elapsed_time = 0;
 
-	float speed_mult = 1.0;
-	int num_particles = 25000;
-	float gravitational_constant = 6.67e-11;
+	// float speed_mult = 1.0;
+	// int num_particles = 25000;
+	// float gravitational_constant = 6.67e-11;
+	//
+	//
+	// float particle_size = 0.05f;
+	//
+	//
+	// PositionConfig position_distr = SPHERE_POS;
+	// VelocityConfig vel_distr = FUNC_ZERO_VEL;
+	// NormalDistribution mass_normal = NormalDistribution(0.5,0.2);
+	//
+	// int num_massive_particles = 3;
+	// float massive_particle_mass = 2;
+	//
+	// float starting_velocity = 1.0f;
+	// float starting_volume_radius = 0.5f;
 
+	Simulation sim;
+	SimulationConfig next_config;
 
-	float particle_size = 0.05f;
-
-
-	PositionDistr position_distr = SPHERE_POS;
-	VelocityDistr vel_distr = FUNC_ZERO_VEL;
-	NormalDistribution mass_normal = NormalDistribution(0.5,0.2);
-
-
-	int num_massive_particles = 3;
-	float massive_particle_mass = 2;
-	float starting_velocity = 1.0f;
-	float starting_volume_radius = 0.5f;
-
+	SimulationUI sim_ui;
+	SimulationUIConfig next_ui_config;
 
 #pragma region GL functions
 
