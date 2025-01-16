@@ -28,6 +28,9 @@ void CMyApp::SetupDebugCallback()
 	}
 }
 
+void CMyApp::LoadTexture(const std::string& filename) {
+	m_textureID = TextureFromFile(filename.c_str());
+}
 
 bool CMyApp::InitGL()
 {
@@ -37,7 +40,7 @@ bool CMyApp::InitGL()
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 
 	// Create VBO
-	vbo = initVBO( num_particles );
+	vbo = initVBO( sim.GetConfig().GetNumberOfParticles() );
 
 	// Create particle shader
 	m_program.AttachShader(GL_VERTEX_SHADER, "../shaders/particle.vert");
@@ -131,7 +134,10 @@ bool CMyApp::InitCL()
 
 		// Make kernel
 		kernel_update = cl::Kernel(program, "update");
-		
+		kernel_hybrid_reduce_root = cl::Kernel(program, "hybrid_reduce_root");
+		kernel_parallel_reduce_root = cl::Kernel(program, "parallel_reduce_root");
+		kernel_build_tree = cl::Kernel(program, "build_tree");
+
 		InitParticles();
 	}
 	catch (cl::Error& error)
@@ -143,10 +149,15 @@ bool CMyApp::InitCL()
 }
 
 void CMyApp::InitParticles(){
+	
 		cl_vbo_mem = cl::BufferGL(context, CL_MEM_WRITE_ONLY, vbo);
 		cl_v = cl::Buffer(context, CL_MEM_READ_WRITE, sim.GetConfig().GetNumberOfParticles() * sizeof(float) * 4);
 		cl_m = cl::Buffer(context, CL_MEM_READ_WRITE, sim.GetConfig().GetNumberOfParticles() * sizeof(float));
 
+		cl_tree = cl::Buffer(context,CL_MEM_READ_WRITE,sim.GetConfig().GetNumberOfParticles() * sizeof(float) * 8);
+		cl_boundary = cl::Buffer(context,CL_MEM_READ_WRITE, sizeof(float) * 4 * 2);
+
+		cl_temp = cl::Buffer(context, CL_MEM_READ_WRITE, WORKGROUP_SIZE * sizeof(float) * 4 * 2);
 		///////////////////////////
 		// Set-up the simulation //
 		///////////////////////////
@@ -156,6 +167,17 @@ void CMyApp::InitParticles(){
 		kernel_update.setArg(0, cl_v);
 		kernel_update.setArg(1, cl_vbo_mem);
 		kernel_update.setArg(2, cl_m);
+
+
+		kernel_hybrid_reduce_root.setArg(0, cl_vbo_mem);
+		kernel_hybrid_reduce_root.setArg(1, cl_temp);
+		kernel_hybrid_reduce_root.setArg(2, WORKGROUP_SIZE * 2  * sizeof(float) * 4,nullptr);
+		kernel_hybrid_reduce_root.setArg(3, sim.GetConfig().GetNumberOfParticles());
+
+		kernel_parallel_reduce_root.setArg(0, cl_vbo_mem);
+		kernel_parallel_reduce_root.setArg(1, cl_boundary);
+		kernel_parallel_reduce_root.setArg(2, WORKGROUP_SIZE * 2  * sizeof(float) * 4,nullptr);
+
 }
 
 bool CMyApp::InitObjectMass()
@@ -372,14 +394,26 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 		// Acquire GL Objects
 		command_queue.enqueueAcquireGLObjects(&acquirable);
 		{
-			cl::NDRange global(num_particles);
+			cl::NDRange global(sim.GetConfig().GetNumberOfParticles());
 
 			// interaction & integration
+			command_queue.enqueueNDRangeKernel(kernel_hybrid_reduce_root,cl::NullRange,WORKGROUP_SIZE*WORKGROUP_SIZE,WORKGROUP_SIZE);
+			command_queue.enqueueBarrierWithWaitList();
+			command_queue.enqueueNDRangeKernel(kernel_parallel_reduce_root,cl::NullRange,WORKGROUP_SIZE,WORKGROUP_SIZE);
+			command_queue.enqueueBarrierWithWaitList();
 			command_queue.enqueueNDRangeKernel(kernel_update, cl::NullRange, global, cl::NullRange);
 
 			// Wait for all computations to finish
 			command_queue.finish();
 		}
+
+		float res[8];
+		command_queue.enqueueReadBuffer(cl_boundary,CL_TRUE,0,sizeof(float) * 4 * 2,&res);
+		for (int i = 0; i < 4 * 2; i++)
+		{
+			std::cout << res[i] << std::endl;
+		}
+
 		// Release GL Objects
 		command_queue.enqueueReleaseGLObjects(&acquirable);
 

@@ -96,14 +96,32 @@ protected:
 
 
 	// CL
+
+	const int WORKGROUP_SIZE = 256;
+
 	cl::Context context;
 	cl::CommandQueue command_queue;
 	cl::Program program;
 
 	cl::Kernel kernel_update;
+	cl::Kernel kernel_hybrid_reduce_root;
+	cl::Kernel kernel_parallel_reduce_root;
+	cl::Kernel kernel_build_tree;
 
 	cl::BufferGL cl_vbo_mem;
 	cl::Buffer cl_v, cl_m;
+
+	cl::Buffer cl_temp;
+
+
+	typedef struct __attribute__ ((packed)) Node{
+		cl_float4 position;
+		cl_float4 centerOfMassAndMass; // xyz - Center of Mass | w - Overall Mass
+	} Node;
+
+	cl::Buffer cl_tree;
+	cl::Buffer cl_boundary;
+
 
 	float delta_time;
 	float simulation_elapsed_time = 0;
