@@ -36,4 +36,4 @@
 
 # JetBrains
 *.idea
-*cmake-build-debug
+*cmake-build-*
