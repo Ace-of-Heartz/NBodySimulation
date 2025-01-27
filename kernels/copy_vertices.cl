@@ -13,7 +13,7 @@ __kernel void copy_vertices (
     for (int i = g_id; i < num_of_bodies; i += g_size){
 
         //DEBUG_PRINT(("[%d] Body:\n\tID: %d\n\tPosition: (%f,%f,%f)\n\tMass:%f",g_id,i,p[i].x,p[i].y,p[i].z,p[i].w));
-        v[i] = (float4){p[i * 3 + 0],p[i * 3 + 1].y,p[i * 3 + 2].z,1.0};
+        v[i] = (float4){p[i * 3 + 0],p[i * 3 + 1],p[i * 3 + 2],1.0};
     }
 
 }
