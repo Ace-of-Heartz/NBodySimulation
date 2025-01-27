@@ -11,11 +11,11 @@ int getParentIdx(int childIdx){
 }
 
 // Returns the index of the an octant with `(boundaryMin + boundaryMax) / 2` center.
-int calculateOctantIdx(float4 position, float4 boundaryMin, float4 boundaryMax)
+int calculateOctantIdx(float3 position, float3 boundaryMin, float3 boundaryMax)
 {
-    float4 center =  (boundaryMax + boundaryMin) / 2.0f;
+    float3 center =  (boundaryMax + boundaryMin) / 2.0f;
 
-    float4 diffVec = position - center;
+    float3 diffVec = position - center;
 
     int idx = 0;
 
@@ -28,10 +28,10 @@ int calculateOctantIdx(float4 position, float4 boundaryMin, float4 boundaryMax)
     return idx;
 }
 
-void adjustBoundaryValues(float4 position, float4* boundaryMin, float4* boundaryMax){
+void adjustBoundaryValues(float3 position, float3* boundaryMin, float3* boundaryMax){
 
-    float4 center = (*boundaryMax + *boundaryMin) / 2.0f;
-    float4 diffVec = position - center;
+    float3 center = (*boundaryMax + *boundaryMin) / 2.0f;
+    float3 diffVec = position - center;
 
     if (diffVec.x > 0){
         boundaryMin->x = center.x;
