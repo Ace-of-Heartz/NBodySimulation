@@ -17,7 +17,8 @@ enum VelocityConfig
     RANDOM_VEL,
     STARTING_OUT_VEL,
     STARTING_IN_VEL,
-    FUNC_ZERO_VEL
+    FUNC_ZERO_VEL,
+    TANGENT_XZ_VEL,
 };
 
 struct NormalDistribution

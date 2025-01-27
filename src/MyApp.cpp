@@ -66,6 +66,48 @@ bool CMyApp::InitGL()
 	return true;
 }
 
+void CMyApp::SetKernelConfig()
+{
+
+
+	num_of_nodes = sim.GetConfig().GetNumberOfParticles() * 3;
+	if (num_of_nodes < 1024 * max_compute_units)
+		num_of_nodes = 1024 * max_compute_units;
+	while ((num_of_nodes & (warpsize - 1)) != 0)
+		++max_compute_units;
+
+	max_children = num_of_nodes * 8;
+	bottom_value = num_of_nodes;
+}
+
+
+std::string CMyApp::GetBuildOptions() const
+{
+	std::string buildOptions;
+	buildOptions.reserve(1024);
+	buildOptions.append("-cl-std=CL2.0 ");
+	//buildOptions.append("-D NUMBER_OF_NODES=" + std::to_string(NUMBER_OF_NODES) + " ");
+	buildOptions.append("-D WORKGROUP_SIZE=" + std::to_string(workgroup_size) + " ");
+	//buildOptions.append("-D PARTICLE_COUNT=" + std::to_string(sim.GetConfig().GetNumberOfParticles()) + " ");
+	buildOptions.append("-I ../kernels ");
+	// buildOptions.append("-D NUMBER_OF_WORKGROUPS=" + std::to_string(NUMBER_OF_WORKGROUPS));
+
+#ifndef NDEBUG
+	buildOptions.append("-D DEBUG");
+#endif
+
+	return buildOptions;
+}
+
+void CMyApp::AppendKernelSourceCode(std::string& sourceCode,const std::string& filename )
+{
+	std::ifstream sourceFile = std::ifstream(filename.data());
+	sourceCode.append(std::istreambuf_iterator<char>(sourceFile), std::istreambuf_iterator<char>());
+	sourceFile.close();
+	sourceCode.append("\n");
+}
+
+
 bool CMyApp::InitCL()
 {  
 	try
@@ -119,14 +161,33 @@ bool CMyApp::InitCL()
 		/////////////////////////////////
 
 		// Read source file
-		std::ifstream sourceFile("../kernels/GLinterop_sol.cl");
-		std::string sourceCode(std::istreambuf_iterator<char>(sourceFile), (std::istreambuf_iterator<char>()));
+		// std::ifstream sourceFile("../kernels/GLinterop_sol.cl");
+		// std::string sourceCode(std::istreambuf_iterator<char>(sourceFile), (std::istreambuf_iterator<char>()));
+		std::string sourceCode; sourceCode.reserve(1024);
+
+		{
+			AppendKernelSourceCode(sourceCode,"../kernels/copy_vertices.cl");
+			AppendKernelSourceCode(sourceCode,"../kernels/boundary_reduce.cl");
+			AppendKernelSourceCode(sourceCode,"../kernels/build_tree.cl");
+			AppendKernelSourceCode(sourceCode,"../kernels/saturate_tree.cl");
+			AppendKernelSourceCode(sourceCode,"../kernels/brute_force_update.cl");
+		}
+
+		{
+			max_compute_units = devices[0].getInfo<CL_DEVICE_MAX_COMPUTE_UNITS>();
+			warpsize = 16;
+			// workgroup_size = devices[0].getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>();
+			workgroup_size = 16;
+			SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,"\n\tMax compute units: %d\n\tWarpsize: %d\n\tMax workgroup size: %d\n",max_compute_units,warpsize,workgroup_size);
+		}
+
+
 		cl::Program::Sources source(1, std::make_pair(sourceCode.c_str(), sourceCode.length()+1));
 
 		// Make program of the source code in the context
 		program = cl::Program(context, source);
 		try {
-			program.build(devices);
+			program.build(devices,GetBuildOptions().data());
 		} catch (cl::Error& error) {
 			std::cout << program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(devices[0]) << std::endl;
 			throw error;
@@ -137,6 +198,8 @@ bool CMyApp::InitCL()
 		kernel_hybrid_reduce_root = cl::Kernel(program, "hybrid_reduce_root");
 		kernel_parallel_reduce_root = cl::Kernel(program, "parallel_reduce_root");
 		kernel_build_tree = cl::Kernel(program, "build_tree");
+		kernel_saturate_tree = cl::Kernel(program, "saturate_tree");
+		kernel_copy = cl::Kernel(program, "copy_vertices"); //Copy from CLBuffer to GLBuffer
 
 		InitParticles();
 	}
@@ -149,98 +212,123 @@ bool CMyApp::InitCL()
 }
 
 void CMyApp::InitParticles(){
-	
-		cl_vbo_mem = cl::BufferGL(context, CL_MEM_WRITE_ONLY, vbo);
-		cl_v = cl::Buffer(context, CL_MEM_READ_WRITE, sim.GetConfig().GetNumberOfParticles() * sizeof(float) * 4);
-		cl_m = cl::Buffer(context, CL_MEM_READ_WRITE, sim.GetConfig().GetNumberOfParticles() * sizeof(float));
+    SetKernelConfig();
 
-		cl_tree = cl::Buffer(context,CL_MEM_READ_WRITE,sim.GetConfig().GetNumberOfParticles() * sizeof(float) * 8);
-		cl_boundary = cl::Buffer(context,CL_MEM_READ_WRITE, sizeof(float) * 4 * 2);
+    cl_vbo_mem = cl::BufferGL(context, CL_MEM_WRITE_ONLY, vbo);
+    cl_v = cl::Buffer(context, CL_MEM_READ_WRITE, sim.GetConfig().GetNumberOfParticles() * sizeof(float) * 3);
+    cl_a = cl::Buffer(context, CL_MEM_READ_WRITE, sim.GetConfig().GetNumberOfParticles() * sizeof(float) * 3);
+    cl_p = cl::Buffer(context,CL_MEM_READ_WRITE, sim.GetConfig().GetNumberOfParticles() * sizeof(float) * 3 + num_of_nodes * sizeof(float) * 3 );
+	cl_m = cl::Buffer(context, CL_MEM_READ_WRITE,sim.GetConfig().GetNumberOfParticles() * sizeof(float) * 1 + num_of_nodes * sizeof(float) * 1);
 
-		cl_temp = cl::Buffer(context, CL_MEM_READ_WRITE, WORKGROUP_SIZE * sizeof(float) * 4 * 2);
-		///////////////////////////
-		// Set-up the simulation //
-		///////////////////////////
+    cl_boundary = cl::Buffer(context,CL_MEM_KERNEL_READ_AND_WRITE | CL_MEM_HOST_READ_ONLY, sizeof(float) * 4 * 2);
+    cl_children = cl::Buffer(context, CL_MEM_READ_WRITE, num_of_nodes * 8 * sizeof(int)); // TODO Recalc this
+    cl_temp = cl::Buffer(context, CL_MEM_READ_WRITE, workgroup_size * sizeof(float) * 4 * 2);
+    cl_bottom_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * 1);
+    cl_error_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * 1);
+	cl_bodycount_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * (num_of_nodes + 1));
 
-		InitObjectMass();
-		InitObjectPositionNVelocity();
-		kernel_update.setArg(0, cl_v);
-		kernel_update.setArg(1, cl_vbo_mem);
-		kernel_update.setArg(2, cl_m);
-
-
-		kernel_hybrid_reduce_root.setArg(0, cl_vbo_mem);
-		kernel_hybrid_reduce_root.setArg(1, cl_temp);
-		kernel_hybrid_reduce_root.setArg(2, WORKGROUP_SIZE * 2  * sizeof(float) * 4,nullptr);
-		kernel_hybrid_reduce_root.setArg(3, sim.GetConfig().GetNumberOfParticles());
-
-		kernel_parallel_reduce_root.setArg(0, cl_vbo_mem);
-		kernel_parallel_reduce_root.setArg(1, cl_boundary);
-		kernel_parallel_reduce_root.setArg(2, WORKGROUP_SIZE * 2  * sizeof(float) * 4,nullptr);
+    ///////////////////////////
+    // Set-up the simulation //
+    ///////////////////////////
+    InitBodyAttributes();
+    SetKernelArgs();
 
 }
 
-bool CMyApp::InitObjectMass()
+bool CMyApp::SetKernelArgs()
 {
+	kernel_update.setArg(0, cl_v);
+	kernel_update.setArg(1, cl_p);
+	kernel_update.setArg(2, cl_a);
 
-	std::random_device rd{};
-	std::mt19937 gen{ rd() };
-	std::normal_distribution d(sim.GetConfig().GetMassDistribution().mean,sim.GetConfig().GetMassDistribution().deviation );
+	kernel_hybrid_reduce_root.setArg(0, cl_p);
+	kernel_hybrid_reduce_root.setArg(1, cl_temp);
+	kernel_hybrid_reduce_root.setArg(2, workgroup_size * 2  * sizeof(float) * 3,nullptr);
+	kernel_hybrid_reduce_root.setArg(3, sim.GetConfig().GetNumberOfParticles());
 
-	std::vector<float> masses; masses.resize(sim.GetConfig().GetNumberOfParticles(),1.0);
+	kernel_parallel_reduce_root.setArg(0, cl_p);
+	kernel_parallel_reduce_root.setArg(1, cl_boundary);
+	kernel_parallel_reduce_root.setArg(2, workgroup_size * 2  * sizeof(float) * 3,nullptr);
+
+	kernel_build_tree.setArg(0, cl_p);
+	kernel_build_tree.setArg(1,cl_boundary);
+	kernel_build_tree.setArg(2, cl_children);
+	kernel_build_tree.setArg(3,max_depth);
+	kernel_build_tree.setArg(4,max_children);
+	kernel_build_tree.setArg(5,sim.GetConfig().GetNumberOfParticles());
+	kernel_build_tree.setArg(6,num_of_nodes);
+	kernel_build_tree.setArg(7,cl_bottom_buffer);
+	kernel_build_tree.setArg(8,cl_error_buffer);
+
+	// kernel_saturate_tree.setArg(0, cl_object_n_nodes);
+	// kernel_saturate_tree.setArg(1, cl_children);
+	// kernel_saturate_tree.setArg(2, sim.GetConfig().GetNumberOfParticles());
+	// kernel_saturate_tree.setArg(3, num_of_nodes);
+	// kernel_saturate_tree.setArg(4, cl_bottom_buffer);
+	// kernel_saturate_tree.setArg(5, cl_bodycount_buffer);
 
 
-	for (size_t i = 0; i < sim.GetConfig().GetNumberOfParticles(); ++i)
-	{
-		masses[i] = d(gen);
-	}
 
-	for (int i = 0; i < sim.GetConfig().GetNumberOfMassiveObjects(); ++i)
-	{
-		auto idx = rand() % sim.GetConfig().GetNumberOfMassiveObjects();
-		if (masses[idx] == sim.GetConfig().GetMassiveObjectMass())
-		{
-			--i;
-		} else
-		{
-			masses[idx] = sim.GetConfig().GetMassiveObjectMass();
-		}
-	}
+	command_queue.enqueueWriteBuffer(cl_bottom_buffer,CL_TRUE,0,sizeof(int) * 1,&bottom_value);
 
-	const cl_int res = command_queue.enqueueWriteBuffer(cl_m,CL_TRUE,0,sim.GetConfig().GetNumberOfParticles()*sizeof(float),&masses[0]);
-	CL_CHECK(res);
+	kernel_copy.setArg(0, cl_p);
+	kernel_copy.setArg(1, cl_vbo_mem);
+	kernel_copy.setArg(2,sim.GetConfig().GetNumberOfParticles());
 	return true;
 }
 
 
 
-bool CMyApp::InitObjectPositionNVelocity()
+
+
+bool CMyApp::InitBodyAttributes()
 {
-	std::vector<float> attributes;
-	attributes.resize(sim.GetConfig().GetNumberOfParticles() * 4,1.0);
+	std::random_device rd{};
+	std::mt19937 gen{ rd() };
+	std::normal_distribution d(sim.GetConfig().GetMassDistribution().mean,sim.GetConfig().GetMassDistribution().deviation );
+
+	std::vector<float> positions(sim.GetConfig().GetNumberOfParticles() * 3);
+	std::vector<float> mass(sim.GetConfig().GetNumberOfParticles() * 1);
+
+	for (size_t i = 0; i < mass.size(); i += 4)
+	{
+		mass[i] = d(gen);
+	}
+
+	for (int i = 0; i < sim.GetConfig().GetNumberOfMassiveObjects(); ++i)
+	{
+		auto idx = rand() % sim.GetConfig().GetNumberOfMassiveObjects();
+		if (mass[idx] == sim.GetConfig().GetMassiveObjectMass())
+		{
+			--i;
+		} else
+		{
+			mass[idx] = sim.GetConfig().GetMassiveObjectMass();
+		}
+	}
+
+	command_queue.enqueueWriteBuffer(cl_m, CL_TRUE, 0, sim.GetConfig().GetNumberOfParticles() * sizeof(float), &mass[0]);
 
 	switch (sim.GetConfig().GetPositionConfig())
 	{
 	case SPHERE_POS:
 		{
-			float idx = -static_cast<float>(attributes.size()) / 2.0f;
-			const auto N = static_cast<float>(attributes.size());
-			for(size_t i = 0; i < attributes.size(); i +=4)
+			float idx = 0;
+			const float N = sim.GetConfig().GetNumberOfParticles();
+			for(size_t i = 0; i < positions.size(); i +=3)
 			{
-				auto lat = glm::asin( (idx * 2.0f) /(2.0f * N + 1.0f)) * 180.0f / glm::pi<float>();
-				//auto lon = 2.0f * glm::pi<float>() * idx / glm::golden_ratio<float>();
+				float eps = 0.5f;
 				float temp;
-				auto lon = glm::modf(idx / glm::golden_ratio<float>(),temp) * 360.0f / glm::golden_ratio<float>();
-				// attribute = glm::vec3(r * sin(lat) * sin(lon), r * cos(lon) , r * cos(lat) * sin(lon));
 
-				if (lon < -180.0f) lon += 360.0f;
-				else if (lon > 180.0f) lon -= 360.0f;
+				auto x = modf(idx / glm::golden_ratio<float>(),&temp);
+				auto y = (idx + eps) / (N - 1.0f + 2.0f * eps);
 
+				auto lat = 2.0f * glm::two_pi<float>() * x;
+				auto lon = glm::acos(1.0f - 2 * y);
 
-				attributes[i] = sim.GetConfig().GetStartingVolumeRadius() * sin(lat) * sin(lon);
-				attributes[i + 1] = sim.GetConfig().GetStartingVolumeRadius() * cos(lon);
-				attributes[i + 2] = sim.GetConfig().GetStartingVolumeRadius() * cos(lat) * sin(lon);
-				attributes[i + 3] = 1.0;
+				positions[i] = sim.GetConfig().GetStartingVolumeRadius() * sin(lat) * sin(lon);
+				positions[i + 1] = sim.GetConfig().GetStartingVolumeRadius() * cos(lon);
+				positions[i + 2] = sim.GetConfig().GetStartingVolumeRadius() * cos(lat) * sin(lon);
 
 				idx += 1.0f;
 			}
@@ -251,9 +339,11 @@ bool CMyApp::InitObjectPositionNVelocity()
 			std::random_device rd{};
 			std::mt19937 gen{ rd() };
 			std::normal_distribution d(0.0f,sim.GetConfig().GetStartingVolumeRadius());
-			for (size_t i = 0; i < attributes.size(); i += 4)
+			for (size_t i = 0; i < positions.size(); i += 3)
 			{
-				attributes[i] = d(gen); attributes[i + 1] = d(gen); attributes[i + 2] = d(gen); attributes[i + 3] = 1.0f;
+				positions[i] = d(gen);
+				positions[i + 1] = d(gen);
+				positions[i + 2] = d(gen);
 			}
 		}
 		break;
@@ -262,65 +352,104 @@ bool CMyApp::InitObjectPositionNVelocity()
 
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
 	auto* values = static_cast<float*>(glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY));
-	for (size_t i = 0; i < attributes.size(); ++i)
-		values[i] = attributes[i];
+	for (size_t i = 0; i < positions.size(); i += 3)
+	{
+		values[i] = positions[i];
+		values[i+1] = positions[i+1];
+		values[i+2] = positions[i+2];
+		values[i+3] = 1.0f;
+
+	}
 	glUnmapBuffer(GL_ARRAY_BUFFER);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+	command_queue.enqueueWriteBuffer(cl_p, CL_TRUE, 0, sim.GetConfig().GetNumberOfParticles() * sizeof(float) * 3, &positions[0]);
+
+	std::vector<float> vels(sim.GetConfig().GetNumberOfParticles() * 3,0.0);
+
 
 	switch (sim.GetConfig().GetVelocityConfig())
 	{
 	case RANDOM_VEL:
 		{
+			for (size_t i = 0; i < vels.size(); i += 3)
+			{
+				std::random_device rd{};
+				std::mt19937 gen{ rd() };
+				std::normal_distribution d(0.0f,0.1f);
+
+				auto vel = glm::normalize(glm::vec3(d(gen),d(gen),d(gen))) * sim.GetConfig().GetStartingSpeedMul();
+				vels[i] = vel.x;
+				vels[i + 1] = vel.y;
+				vels[i + 2] = vel.z;
+			}
 
 		}
 		break;
 	case STARTING_OUT_VEL:
 		{
-			for (size_t i = 0; i < attributes.size(); i += 4)
+			for (size_t i = 0; i < vels.size(); i += 3)
 			{
 
-				auto vel = glm::vec3(attributes[i],attributes[i + 1],attributes[i + 2]) ;
+				auto vel = glm::vec3(positions[i],positions[i + 1],positions[i + 2]);
 				vel = glm::normalize(vel)  * sim.GetConfig().GetStartingSpeedMul() *  1.0f;
-				attributes[i] = vel.x;
-				attributes[i + 1] = vel.y;
-				attributes[i + 2] = vel.z;
-				attributes[i + 3] = 0.0f;
+				vels[i] = vel.x;
+				vels[i + 1] = vel.y;
+				vels[i + 2] = vel.z;
 			}
 		}
 		break;
 	case STARTING_IN_VEL:
 		{
-			for (size_t i = 0; i < attributes.size(); i += 4)
+			for (size_t i = 0; i < vels.size(); i += 3)
 			{
-				auto vel = glm::vec3(attributes[i],attributes[i + 1],attributes[i + 2]);
+				auto vel = glm::vec3(positions[i],positions[i + 1],positions[i + 2]);
 				vel = glm::normalize(vel) * sim.GetConfig().GetStartingSpeedMul()  * -1.0f;
-				attributes[i] = vel.x;
-				attributes[i + 1] = vel.y;
-				attributes[i + 2] = vel.z;
-				attributes[i + 3] = 0.0f;
+				vels[i] = vel.x;
+				vels[i + 1] = vel.y;
+				vels[i + 2] = vel.z;
 			}
 		}
 		break;
 	case FUNC_ZERO_VEL:
 		{
-			for (size_t i = 0; i < attributes.size(); i += 4)
+			for (size_t i = 0; i < vels.size(); i += 3)
 			{
-				attributes[i] = glm::epsilon<float>();
-				attributes[i + 1] = glm::epsilon<float>();
-				attributes[i + 2] = glm::epsilon<float>();
-				attributes[i + 3] = 0.0f;
+				vels[i] = glm::epsilon<float>();
+				vels[i + 1] = glm::epsilon<float>();
+				vels[i + 2] = glm::epsilon<float>();
 			}
 
 		}
 		break;
+	case TANGENT_XZ_VEL:
+		{
+			for (size_t i = 0; i < vels.size(); i += 3)
+			{
+				auto pos = glm::vec3(positions[i],positions[i + 1],positions[i + 2]);
+				auto other = abs(glm::dot(glm::vec3(0,1,0),pos)) < glm::epsilon<float>() ? glm::cross(glm::vec3(1,0,0),pos) : glm::cross(glm::vec3(0,1,0),pos);
+				other = other * sim.GetConfig().GetStartingSpeedMul();
+				vels[i] = other.x;
+				vels[i + 1] = other.y;
+				vels[i + 2] = other.z;
+			}
+		}
+		break;
 	}
-
-	auto res = command_queue.enqueueWriteBuffer(cl_v, CL_TRUE, 0, sim.GetConfig().GetNumberOfParticles() * sizeof(float) * 4, &attributes[0]);
+	auto res = command_queue.enqueueWriteBuffer(cl_v, CL_TRUE, 0, sim.GetConfig().GetNumberOfParticles() * sizeof(float) * 3, &vels[0]);
 	CL_CHECK(res);
 
 	return true;
 }
 
+bool CMyApp::InitObjectAcceleration()
+{
+	std::vector<float> acc(sim.GetConfig().GetNumberOfParticles() * 3,0.0);
+	auto res = command_queue.enqueueWriteBuffer(cl_a,CL_TRUE,0,sim.GetConfig().GetNumberOfParticles() * sizeof(float) * 3,&acc[0]);
+	CL_CHECK(res);
+
+	return true;
+}
 
 
 
@@ -349,7 +478,6 @@ void CMyApp::CleanCL()
 {
 	cl_vbo_mem = nullptr;
 	cl_v = nullptr;
-	cl_m = nullptr;
 	program = nullptr;
 	kernel_update = nullptr;
 	command_queue = nullptr;
@@ -386,6 +514,7 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 	kernel_update.setArg(3, delta_time);
 	kernel_update.setArg(4,sim.GetConfig().GetGravitationalConstant());
 
+
 	// CL
 	try {
 		cl::vector<cl::Memory> acquirable;
@@ -396,24 +525,27 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 		{
 			cl::NDRange global(sim.GetConfig().GetNumberOfParticles());
 
-			// interaction & integration
-			command_queue.enqueueNDRangeKernel(kernel_hybrid_reduce_root,cl::NullRange,WORKGROUP_SIZE*WORKGROUP_SIZE,WORKGROUP_SIZE);
+			command_queue.enqueueNDRangeKernel(kernel_hybrid_reduce_root,cl::NullRange,workgroup_size*workgroup_size,workgroup_size);
 			command_queue.enqueueBarrierWithWaitList();
-			command_queue.enqueueNDRangeKernel(kernel_parallel_reduce_root,cl::NullRange,WORKGROUP_SIZE,WORKGROUP_SIZE);
+
+			command_queue.enqueueNDRangeKernel(kernel_parallel_reduce_root,cl::NullRange,workgroup_size,workgroup_size);
 			command_queue.enqueueBarrierWithWaitList();
+
+			command_queue.enqueueNDRangeKernel(kernel_build_tree,cl::NullRange,workgroup_size * workgroup_size,workgroup_size);
+			command_queue.enqueueBarrierWithWaitList();
+
+			command_queue.enqueueNDRangeKernel(kernel_saturate_tree,cl::NullRange,workgroup_size * workgroup_size,workgroup_size);
+
 			command_queue.enqueueNDRangeKernel(kernel_update, cl::NullRange, global, cl::NullRange);
+			command_queue.enqueueBarrierWithWaitList();
+
+			command_queue.enqueueNDRangeKernel(kernel_copy,cl::NullRange,global,cl::NullRange);
+			command_queue.enqueueBarrierWithWaitList();
+			command_queue.enqueueWriteBuffer(cl_bottom_buffer,CL_TRUE,0,sizeof(int) * 1,&bottom_value);
 
 			// Wait for all computations to finish
 			command_queue.finish();
 		}
-
-		float res[8];
-		command_queue.enqueueReadBuffer(cl_boundary,CL_TRUE,0,sizeof(float) * 4 * 2,&res);
-		for (int i = 0; i < 4 * 2; i++)
-		{
-			std::cout << res[i] << std::endl;
-		}
-
 		// Release GL Objects
 		command_queue.enqueueReleaseGLObjects(&acquirable);
 
@@ -479,12 +611,11 @@ void CMyApp::RenderGUI()
 			ImGui::Text("Starting velocity distribution: %s",sim_ui.GetUIConfig().GetVelocityConfigItem());
 
 
-			// auto curr = std::chrono::system_clock::now();
 			long to_long_milli = simulation_elapsed_time * 60;
 			ImGui::Text("Time of simulation: %d:%d:%d" ,
 
-				(to_long_milli / 60) / (60 ),
-				(to_long_milli / 60) % 60,
+				to_long_milli / 60 / 60,
+				to_long_milli / 60 % 60,
 				to_long_milli % 60
 				);
 
@@ -505,21 +636,9 @@ void CMyApp::RenderGUI()
 
 			ImGui::Separator();
 
-			if(ImGui::Button("Restart"))
+			if(ImGui::Button("Reset"))
 			{
-
-				sim_ui.SetUIConfig(next_ui_config);
-				//Clean();
-				sim.SetConfig(next_config);
-
-				if(vbo){
-					glBindBuffer(GL_ARRAY_BUFFER, vbo);
-					glBufferData(GL_ARRAY_BUFFER, sim.GetConfig().GetNumberOfParticles()*sizeof(float) * 4, 0, GL_DYNAMIC_DRAW);
-					glBindBuffer(GL_ARRAY_BUFFER, 0);
-				}
-
-				InitParticles();
-
+				ResetSimulation();
 			}
 
 			ImGui::Separator();
@@ -567,6 +686,8 @@ void CMyApp::RenderGUI()
 
 					if (ImGui::TreeNode("Velocity"))
 					{
+						if (ImGui::InputFloat("Starting Velocity:", &next_config.GetStartingSpeedMul()),1,10)
+
 						if(ImGui::BeginCombo("Velocity Distribution",next_ui_config.GetVelocityConfigItem()))
 						{
 							for (auto& [name,value] : SimulationUI::vel_config_items)
@@ -591,7 +712,7 @@ void CMyApp::RenderGUI()
 
 						ImGui::InputInt("Number of Massive Particles:",&next_config.GetNumberOfMassiveObjects(),1,10);
 						if (next_config.GetNumberOfMassiveObjects() > next_config.GetNumberOfParticles()) next_config.GetNumberOfParticles() = next_config.GetNumberOfMassiveObjects();
-						ImGui::SliderFloat("Mass of Massive Particles:",&next_config.GetMassiveObjectMass(),0.0f,100.0f);
+						ImGui::SliderFloat("Mass of Massive Particles:",&next_config.GetMassiveObjectMass(),0.0f,100000.0f);
 						ImGui::TreePop();
 					}
 
@@ -612,9 +733,29 @@ void CMyApp::RenderGUI()
 			ImGui::EndMenu();
 		}
 
+		if(ImGui::BeginMenu("Debug"))
+		{
+			ImGui::Checkbox("Kernel debug mode",&kernel_debug);
+			ImGui::EndMenu();
+		}
+
 		ImGui::EndMainMenuBar();
 	}
 
+}
+
+void CMyApp::ResetSimulation()
+{
+	sim_ui.SetUIConfig(next_ui_config);
+	sim.SetConfig(next_config);
+
+	if(vbo){
+		glBindBuffer(GL_ARRAY_BUFFER, vbo);
+		glBufferData(GL_ARRAY_BUFFER, sim.GetConfig().GetNumberOfParticles()*sizeof(float) * 4, 0, GL_DYNAMIC_DRAW);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+	}
+
+	InitParticles();
 }
 
 
@@ -626,6 +767,13 @@ void CMyApp::RenderGUI()
 
 void CMyApp::KeyboardDown(SDL_KeyboardEvent& key)
 {
+	switch (key.keysym.sym)
+	{
+		case SDLK_r:
+			ResetSimulation();
+
+	}
+
 	m_cameraManipulator.KeyboardDown( key );
 }
 

@@ -2,11 +2,7 @@
 __constant float distanceThreshold = 0.1f;
 
 
-typedef struct __attribute__ ((packed)) Node
-{
-    float4 position;
-    float4 centerOfMassAndMass; // xyz - Center of Mass | w - Overall Mass
-};
+
 
 float4 get_min(float4 v1, float4 v2){
     float4 res;
@@ -88,22 +84,6 @@ __kernel void parallel_reduce_root(
     }
 }
 
-//256
-
-__kernel void calc_boundary_coordinates(
-    __global float4 *boundaries,
-    __global Node *nodes,
-    __global float4 *res,
-    __local float4 *scratch
-)
-{
-    int l_id = get_local_id();
-    int line_id = get_local_id() % 8;
-
-
-}
-
-
 int getNthChild(int parentIdx, int nth){
 
     return parentIdx * 8 + nth;
@@ -114,14 +94,160 @@ int getParent(int childIdx){
 }
 
 
+int calculateOctantIdx(float4 position, float4 boundaryMin, float4 boundaryMax)
+{
+    float4 center =  (boundaryMax + boundaryMin) / 2.0f;
+
+    float4 diffVec = position - center;
+
+    int idx = 0;
+
+    idx = 2 - 2 * diffVec.y/fabs(diffVec.y); // y < 0 ? 4 : 0
+
+    idx += 1 - 1 * diffVec.x/fabs(diffVec.x); // x < 0 ? 2 : 0
+
+    idx += 0.5f - 0.5f * diffVec.z/fabs(diffVec.z); // z < 0 ? 1 : 0
+
+    if (diffVec.x > 0){
+        boundaryMin.x = position.x;
+    }
+    else {
+        boundaryMax.x = position.x;
+    }
+
+    return idx;
+}
+
+
+
+
+
+#define LOCKED -2
+#define UNLOCKED 0
+
+#define COMPACT_TREE_BUILD
+/*
+Build and calculate the nodes of the octree in one kernel using atomic operations
+May not as be efficient as using locks and separating building and calculating the tree nodes into two steps!
+*/
+
+
+#ifdef COMPACT_TREE_BUILD
 __kernel void build_tree(
     __global float4 *p,
-    __global struct Node *n,
-    __global float4 *boundaries //2
+    __global float *m,
+    __global float4 *boundaries, //Root boundary max and min
+    __global float4 *nodes, // Tree representing the nodes
+    __local int children, //Locks for each node in the tree
+    unsigned int length,
+    unsigned int max_tree_capacity,
+    unsigned int max_depth
     )
 {
+    int l_id = get_local_id(0);
+    int g_id = get_global_id(0);
+
+    //Cache local variables
+    __local float4 minBoundary, maxBoundary;
+    __local float mass;
+    __local float4 position;
+
+
+    minBoundary = boundaries[0];
+    maxBoundary = boundaries[1];
+
+    if (length - 1 <=  g_id){
+        mass = 0.0f;
+        position = (float4)(0.0f,0.0f,0.0f,0.0f);
+    } else {
+        mass = m[g_id];
+        position = p[g_id];
+    }
+
+    for (int g_id = get_global_id(0); g_id < max_tree_capacity; g_id += get_global_size(0)){
+        locks[g_id] = UNLOCKED; //Initialize locks
+    }
+
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    bool success = false;
+
+    int currentNodeIdx, nextNodeIdx, depth;
+
+    currentNodeIdx = 0; // Root
+    depth = 0;
+
+
+    while(!success && depth < max_depth){
+        int octant = calculateOctantIdx(position,minBoundary,maxBoundary);
+        adjustBoundaryValues(position,&minBoundary,&maxBoundary);
+
+        nextNodeIdx = getNthChild(octant,nextIdx);
+
+
+        if (locks[nextNodeIdx] != LOCKED){
+            if(atomic_cmpxchg(&locks[nextNodeIdx],UNLOCKED,LOCKED) == UNLOCKED )
+            {
+                // Locking succeed
+                if (nodes[nextNodeIdx]){
+                    // Cell was NOT null
+                    int original_octant, conflict_octant;
+                    int original_idx, conflict_idx;
+                    float4 original = nodes[nextNodeIdx];
+                    do {
+
+                        original_octant = calculateOctantIdx(original,minBoundary,maxBoundary);
+                        original_idx = getNthChild(currentNodeIdx,original_octant);
+
+                        conflict_octant = calculateOctantIdx(position,minBoundary,maxBoundary);
+                        conflict_idx = getNthChild(currentNodeIdx,conflict_idx);
+
+                        currentNodeIdx = original_idx;
+                        ++depth;
+                    } while(original_octant != conflict_octant && depth < max_depth)
+
+                    if (depth < max_depth){
+                        nodes[original_idx] = (float4)(original.x,original.y,original.z,original.w);
+                        nodes[conflict_idx] = (float4)(position.x,position.y,position.z,mass);
+                    } else { // Treat the particles as one particle
+                        nodes[original_idx] = (float4)(original.x,original.y,original.z,original.w);
+                        notes[conflict_idx] += (float4)(position.x,position.y,position.z,mass);
+
+                    }
+
+                }
+                else {
+                    // Cell was null
+                    nodes[nextNodeIdx] = (float4)(position.x,position.y,position.z,mass);
+
+                    barrier(CLK_LOCAL_MEM_FENCE);
+                    atomic_xchg(&locks[nextNodeIdx],LEAF);
+                }
+                success = true;
+            }
+
+
+            //Processed or locked
+        } else { //LOCKED
+
+
+        }
+
+        currentNodeIdx = nextNodeIdx;
+        ++depth;
+    }
+
+
+
 
 }
+
+#else
+__kernel void build_tree(
+
+)
+#endif
 
 
 __kernel void update(
