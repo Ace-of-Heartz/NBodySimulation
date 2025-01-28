@@ -6,6 +6,8 @@
 #define SIMULATIONCONFIG_H
 #include <utility>
 
+#include "BarnesHutConfig.h"
+
 enum PositionConfig
 {
     SPHERE_POS,
@@ -21,6 +23,14 @@ enum VelocityConfig
     TANGENT_XZ_VEL,
 };
 
+enum AlgorithmConfig
+{
+    BARNES_HUT,
+    BRUTE_FORCE_GLOBAL, // Naive
+    BRUTE_FORCE_LOCAL, // Optimized with local cache TODO
+
+};
+
 struct NormalDistribution
 {
     float mean;
@@ -33,7 +43,7 @@ public:
     SimulationConfig() = default;
 
     SimulationConfig(const SimulationConfig& other)
-        : number_of_particles(other.number_of_particles),
+        : num_of_bodies(other.num_of_bodies),
           gravitational_constant(other.gravitational_constant),
           starting_speed_mul(other.starting_speed_mul),
           starting_volume_radius(other.starting_volume_radius),
@@ -41,12 +51,14 @@ public:
           massive_object_mass(other.massive_object_mass),
           pos_config(other.pos_config),
           vel_config(other.vel_config),
-          mass_distr(other.mass_distr)
+          mass_distr(other.mass_distr),
+          algo_config(other.algo_config),
+          barnes_hut_config(other.barnes_hut_config)
     {
     }
 
     SimulationConfig(SimulationConfig&& other) noexcept
-        : number_of_particles(other.number_of_particles),
+        : num_of_bodies(other.num_of_bodies),
           gravitational_constant(other.gravitational_constant),
           starting_speed_mul(other.starting_speed_mul),
           starting_volume_radius(other.starting_volume_radius),
@@ -54,7 +66,9 @@ public:
           massive_object_mass(other.massive_object_mass),
           pos_config(other.pos_config),
           vel_config(other.vel_config),
-          mass_distr(std::move(other.mass_distr))
+          mass_distr(other.mass_distr),
+          algo_config(other.algo_config),
+          barnes_hut_config(std::move(other.barnes_hut_config))
     {
     }
 
@@ -62,7 +76,7 @@ public:
     {
         if (this == &other)
             return *this;
-        number_of_particles = other.number_of_particles;
+        num_of_bodies = other.num_of_bodies;
         gravitational_constant = other.gravitational_constant;
         starting_speed_mul = other.starting_speed_mul;
         starting_volume_radius = other.starting_volume_radius;
@@ -71,6 +85,8 @@ public:
         pos_config = other.pos_config;
         vel_config = other.vel_config;
         mass_distr = other.mass_distr;
+        algo_config = other.algo_config;
+        barnes_hut_config = other.barnes_hut_config;
         return *this;
     }
 
@@ -78,7 +94,7 @@ public:
     {
         if (this == &other)
             return *this;
-        number_of_particles = other.number_of_particles;
+        num_of_bodies = other.num_of_bodies;
         gravitational_constant = other.gravitational_constant;
         starting_speed_mul = other.starting_speed_mul;
         starting_volume_radius = other.starting_volume_radius;
@@ -87,12 +103,14 @@ public:
         pos_config = other.pos_config;
         vel_config = other.vel_config;
         mass_distr = std::move(other.mass_distr);
+        algo_config = other.algo_config;
+        barnes_hut_config = other.barnes_hut_config;
         return *this;
     }
 
-    [[nodiscard]] int& GetNumberOfParticles()
+    [[nodiscard]] int& GetNumberOfBodies()
     {
-        return number_of_particles;
+        return num_of_bodies;
     }
 
     [[nodiscard]] float& GetGravitationalConstant()
@@ -135,9 +153,17 @@ public:
         return mass_distr;
     }
 
-    void SetNumberOfParticles(const int number_of_particles)
+    [[nodiscard]] AlgorithmConfig& GetAlgorithmConfig(){
+        return algo_config;
+    }
+
+    [[nodiscard]] BarnesHutConfig& GetBarnesHutConfig(){
+        return barnes_hut_config;
+    }
+
+    void SetNumberOfBodies(const int number_of_particles)
     {
-        this->number_of_particles = number_of_particles;
+        this->num_of_bodies = number_of_particles;
     }
 
     void SetGravitationalConstant(const float gravitational_constant)
@@ -180,20 +206,33 @@ public:
         this->mass_distr = mass_distr;
     }
 
+    void SetAlgorithmConfig(const AlgorithmConfig algo)
+    {
+        algo_config = algo;
+    }
+
+    void SetBarnesHutConfig(const BarnesHutConfig barnes_hut_config)
+    {
+        this->barnes_hut_config = barnes_hut_config;
+    }
+
 private:
-    int number_of_particles = 20000;
+    int num_of_bodies = 20000;
     float gravitational_constant = 6.67e-11;
 
     float starting_speed_mul = 1.0f;
-    float starting_volume_radius = 0.5f;
+    float starting_volume_radius = 1.5f;
 
     int number_of_massive_objects = 0;
     float massive_object_mass = 1.0f;
 
     PositionConfig pos_config = UNIFORM_POS;
     VelocityConfig vel_config = FUNC_ZERO_VEL;
+    AlgorithmConfig algo_config = BRUTE_FORCE_GLOBAL;
 
     NormalDistribution mass_distr = NormalDistribution(0.5,0.25);
+
+    BarnesHutConfig barnes_hut_config;
 };
 
 struct Simulation
@@ -202,6 +241,7 @@ struct Simulation
     {
         return config;
     }
+
 
     void SetConfig(const SimulationConfig& config)
     {
