@@ -84,6 +84,17 @@ protected:
 	void CleanGL();
 	void CleanCL();
 
+	std::string filename = "log.txt";
+	std::ofstream log_file;
+	void LogState();
+	void LogChildrenBuffer();
+	void LogPositionBuffer();
+	void LogVelocityBuffer();
+	void LogAccelerationBuffer();
+	void LogMassBuffer();
+	void LogErrors(std::string);
+	void LogDepthBuffer();
+
 	void ResetSimulation();
 	// GL
 	int windowH, windowW;
@@ -103,10 +114,10 @@ protected:
 
 	// CL
 
-	int workgroup_size = 256;
+	int workgroup_size = 16;
 	int num_of_nodes;
 	int num_of_workgroups;
-	int warpsize;
+	int warpsize = 16;
 	int max_compute_units;
 
 	bool kernel_debug = true;
@@ -115,17 +126,24 @@ protected:
 	unsigned int max_depth = 32;
 	int bottom_value = 0;
 
+	bool log_updates = false;
+	bool render = true;
+	long update_id = 0;
 
 	cl::Context context;
 	cl::CommandQueue command_queue;
 	cl::Program program;
 
+	cl::Kernel kernel_init;
 	cl::Kernel kernel_update;
+	cl::Kernel kernel_update_local;
 	cl::Kernel kernel_copy;
 	cl::Kernel kernel_hybrid_reduce_root;
 	cl::Kernel kernel_parallel_reduce_root;
 	cl::Kernel kernel_build_tree;
 	cl::Kernel kernel_saturate_tree;
+	cl::Kernel kernel_calculate_force;
+	cl::Kernel kernel_bh_update;
 
 	cl::BufferGL cl_vbo_mem;
 	cl::Buffer cl_v, cl_m ,cl_a;
@@ -138,6 +156,7 @@ protected:
 	cl::Buffer cl_bottom_buffer;
 	cl::Buffer cl_error_buffer;
 	cl::Buffer cl_bodycount_buffer;
+	cl::Buffer cl_depth_buffer;
 
 	float delta_time;
 	float simulation_elapsed_time = 0;
