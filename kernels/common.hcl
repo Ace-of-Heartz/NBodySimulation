@@ -1,6 +1,11 @@
 #ifndef COMMON_HCL
 #define COMMON_HCL
 
+#pragma OPENCL EXTENSION cl_khr_global_int32_base_atomics : enable
+#pragma OPENCL EXTENSION cl_khr_global_int32_extended_atomics : enable
+#pragma OPENCL EXTENSION cl_khr_local_int32_base_atomics : enable
+
+
 #define LOCKED -2
 #define DEFAULT -1
 
