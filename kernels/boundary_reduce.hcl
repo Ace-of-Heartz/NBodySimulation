@@ -40,16 +40,16 @@ float3 get_max_v3(float3 v1, float3 v2){
 }
 
 __kernel void hybrid_reduce_root(
-    __global float4* p,
-    __global float4* local_extremities,
-    __local float4* scratch,
+    __global float* p,
+    __global float* local_extremities,
+    __local  float* scratch,
     const unsigned num_of_bodies
 );
 
 __kernel void parallel_reduce_root(
-    __global float4* local_extremities,
-    __global float4* extremity,
-    __local  float4* scratch
+    __global float* local_extremities,
+    __global float* extremity,
+    __local  float* scratch
 );
 
 #endif
