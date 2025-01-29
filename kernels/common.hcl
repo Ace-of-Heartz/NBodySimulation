@@ -18,5 +18,10 @@
 # define DEBUG_PRINT(x) do {} while (0)
 #endif
 
+typedef enum NumericalMethod{
+    Leapfrog = 1,
+    Euler = 2
+} NumericalMethod;
+
 
 #endif
