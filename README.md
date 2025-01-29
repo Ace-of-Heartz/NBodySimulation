@@ -2,16 +2,24 @@
 
 ## Description
 
-**N-Body simulation** implemented in 3D with OpenCL 2.0 and OpenGL.
+**N-Body simulation** implemented in 3D with OpenCL 2.0 and OpenGL. Based on [An Efficient CUDA Implementation of the Tree-Based Barnes Hut n-Body Algorithm](https://iss.oden.utexas.edu/Publications/Papers/burtscher11.pdf) and [GPU-N-Body Repository](https://github.com/bneukom/gpu-nbody), see below for details.
 Currently supports 3 types of algorithms:
 - Brute Force using only Global Memory
 - Brute Force using Locally Cached Memory
 - Barnes-Hut Algorithm using Octrees
 
+## Examples
+### Particles randomized with normal distribution
+[NormalDistConfigurration.webm](assets/NormalDistConfigurration.webm)
+
+### Sphere configuration with particles
+[SphereConfiguration.webm](assets/SphereConfiguration.webm)
+
 ## APIs
 - OpenGL3
 - ImGui
 - SDL2
+
 
 
 ## Credits & Sources
