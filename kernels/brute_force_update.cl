@@ -5,8 +5,9 @@ __kernel void update(
 	__global float *p, // state: position and mass
 	__global float *m,
 	__global float *a, // acceleration
-	float dt, // delta time (time between frames)
-	float G // gravitational constant
+	const float dt, // delta time (time between frames)
+	const float G, // gravitational constant
+	const NumericalMethod method
 	)
 {
 #ifdef DEBUG
@@ -27,21 +28,21 @@ __kernel void update(
 	//
 	// (Tip: add a small constant to divisor to avoid numerical errors!)
 
-	int gid = get_global_id(0);
+	int g_id = get_global_id(0);
     float3 p_gid = (float3){
-        p[gid * 3 + 0],
-        p[gid * 3 + 1],
-        p[gid * 3 + 2],
+        p[g_id * 3 + 0],
+        p[g_id * 3 + 1],
+        p[g_id * 3 + 2],
     };
 
-    float mass = m[gid];
+    float mass = m[g_id];
 
 	// Aggregate acceleration for each object
 	float3 a_gid = {0.0f, 0.0f, 0.0f};
 
 	for (int i = 0; i < get_global_size(0); ++i)
 	{
-		if (i == gid) continue;
+		if (i == g_id) continue;
         float3 p_other = (float3){
             p[i * 3 + 0],
             p[i * 3 + 1],
@@ -57,30 +58,49 @@ __kernel void update(
         float s = m_other / pow((dist_sqr),3/2);
 
         a_gid += d_vec * s;
-//        a_gid += ((m_other) / pow((pow(d,2) + pow(eps,2)),3/2)) * d_vec;
 
-		// 1. compute force and distance
-		// 2. compute acceleration
-		// 3. aggregate acceleration
 	}
 	a_gid *= G;
 
 	// 4. integrate speed (using dt and a_gid)
 
-    barrier(CLK_GLOBAL_MEM_FENCE);
+    barrier(CLK_GLOBAL_MEM_FENCE); // Maybe this isn't necessary? But premature changes to position could cause some issues still
 
-    a[gid + 3 + 0] = a_gid.x;
-    a[gid + 3 + 1] = a_gid.y;
-    a[gid + 3 + 2] = a_gid.z;
-	// 5. integrate position
+    switch(method){
 
-    v[gid * 3 + 0] = v[gid * 3 + 0] + a_gid.x * dt;
-    v[gid * 3 + 1] = v[gid * 3 + 1] + a_gid.y * dt;
-    v[gid * 3 + 2] = v[gid * 3 + 2] + a_gid.z * dt;
+        case Leapfrog:
+        {
+            float v_i_half_X, v_i_half_Y, v_i_half_Z;
+            v_i_half_X = v[g_id * 3 + 0] + a[g_id * 3 + 0] * dt * 0.5f;
+            v_i_half_Y = v[g_id * 3 + 1] + a[g_id * 3 + 1] * dt * 0.5f;
+            v_i_half_Z = v[g_id * 3 + 2] + a[g_id * 3 + 2] * dt * 0.5f;
 
-    p[gid * 3 + 0] = p[gid * 3 + 0] + v[gid * 3 + 0] * dt;
-    p[gid * 3 + 1] = p[gid * 3 + 1] + v[gid * 3 + 1] * dt;
-    p[gid * 3 + 2] = p[gid * 3 + 2] + v[gid * 3 + 2] * dt;
+            p[g_id * 3 + 0] = p[g_id * 3 + 0] + v_i_half_X * dt;
+            p[g_id * 3 + 1] = p[g_id * 3 + 1] + v_i_half_Y * dt;
+            p[g_id * 3 + 2] = p[g_id * 3 + 2] + v_i_half_Z * dt;
+
+            v[g_id * 3 + 0] = v_i_half_X + a_gid.x * dt * 0.5f;
+            v[g_id * 3 + 1] = v_i_half_Y + a_gid.y * dt * 0.5f;
+            v[g_id * 3 + 2] = v_i_half_Z + a_gid.z * dt * 0.5f;
+
+        } break;
+        case Euler:
+        {
+            a[g_id * 3 + 0] = a_gid.x;
+            a[g_id * 3 + 1] = a_gid.y;
+            a[g_id * 3 + 2] = a_gid.z;
+
+            v[g_id * 3 + 0] = v[g_id * 3 + 0] + a_gid.x * dt;
+            v[g_id * 3 + 1] = v[g_id * 3 + 1] + a_gid.y * dt;
+            v[g_id * 3 + 2] = v[g_id * 3 + 2] + a_gid.z * dt;
+
+            p[g_id * 3 + 0] = p[g_id * 3 + 0] + v[g_id * 3 + 0] * dt;
+            p[g_id * 3 + 1] = p[g_id * 3 + 1] + v[g_id * 3 + 1] * dt;
+            p[g_id * 3 + 2] = p[g_id * 3 + 2] + v[g_id * 3 + 2] * dt;
+        } break;
+    }
+
+
 
 }
 
@@ -112,7 +132,8 @@ __kernel void update_local(
 	__global float *a, // acceleration
 	const float dt, // delta time (time between frames)
 	const float G, // gravitational constant
-	const int num_of_bodies
+	const int num_of_bodies,
+	const NumericalMethod method
 		)
 {
 #ifdef DEBUG
@@ -154,6 +175,7 @@ __kernel void update_local(
 
         barrier(CLK_LOCAL_MEM_FENCE);
         for(int j = 0; j < WORKGROUP_SIZE; ++j){
+            if(g_id == tile * WORKGROUP_SIZE + j) continue;
             a_gid = calc_body_body(p_gid,mass,(float3){shPos[j].x,shPos[j].y,shPos[j].z},shPos[j].w,a_gid);
 
         }
@@ -166,19 +188,40 @@ __kernel void update_local(
 
     if(g_id < num_of_bodies) // Only the last workgroup will have thread divergence here
     {
-        a[g_id + 3 + 0] = a_gid.x;
-        a[g_id + 3 + 1] = a_gid.y;
-        a[g_id + 3 + 2] = a_gid.z;
+        switch(method){
 
-        v[g_id * 3 + 0] = v[g_id * 3 + 0] + a_gid.x * dt;
-        v[g_id * 3 + 1] = v[g_id * 3 + 1] + a_gid.y * dt;
-        v[g_id * 3 + 2] = v[g_id * 3 + 2] + a_gid.z * dt;
+            case Leapfrog:
+            {
+                float v_i_half_X, v_i_half_Y, v_i_half_Z;
+                v_i_half_X = v[g_id * 3 + 0] + a[g_id * 3 + 0] * dt * 0.5f;
+                v_i_half_Y = v[g_id * 3 + 1] + a[g_id * 3 + 1] * dt * 0.5f;
+                v_i_half_Z = v[g_id * 3 + 2] + a[g_id * 3 + 2] * dt * 0.5f;
 
-        p[g_id * 3 + 0] = p[g_id * 3 + 0] + v[g_id * 3 + 0] * dt;
-        p[g_id * 3 + 1] = p[g_id * 3 + 1] + v[g_id * 3 + 1] * dt;
-        p[g_id * 3 + 2] = p[g_id * 3 + 2] + v[g_id * 3 + 2] * dt;
+                p[g_id * 3 + 0] = p[g_id * 3 + 0] + v_i_half_X * dt;
+                p[g_id * 3 + 1] = p[g_id * 3 + 1] + v_i_half_Y * dt;
+                p[g_id * 3 + 2] = p[g_id * 3 + 2] + v_i_half_Z * dt;
 
-        g_id += get_global_size(0);
+                v[g_id * 3 + 0] = v_i_half_X + a_gid.x * dt * 0.5f;
+                v[g_id * 3 + 1] = v_i_half_Y + a_gid.y * dt * 0.5f;
+                v[g_id * 3 + 2] = v_i_half_Z + a_gid.z * dt * 0.5f;
+
+            } break;
+            case Euler:
+            {
+                a[g_id * 3 + 0] = a_gid.x;
+                a[g_id * 3 + 1] = a_gid.y;
+                a[g_id * 3 + 2] = a_gid.z;
+
+                v[g_id * 3 + 0] = v[g_id * 3 + 0] + a_gid.x * dt;
+                v[g_id * 3 + 1] = v[g_id * 3 + 1] + a_gid.y * dt;
+                v[g_id * 3 + 2] = v[g_id * 3 + 2] + a_gid.z * dt;
+
+                p[g_id * 3 + 0] = p[g_id * 3 + 0] + v[g_id * 3 + 0] * dt;
+                p[g_id * 3 + 1] = p[g_id * 3 + 1] + v[g_id * 3 + 1] * dt;
+                p[g_id * 3 + 2] = p[g_id * 3 + 2] + v[g_id * 3 + 2] * dt;
+            } break;
+        }
+
     }
 
 

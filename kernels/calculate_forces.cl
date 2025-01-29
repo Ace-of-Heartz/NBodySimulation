@@ -1,45 +1,6 @@
 #include "calculate_forces.hcl"
 #include "common.hcl"
 
-//TODO: If this doesn't work properly, make it only global memory / remove workspace related stuff
-
-//__kernel void calculate_force_global(
-//    __global float* positions,
-//    __global float* mass,
-//    __global float* vels,
-//    __global float* accs,
-//    __global int* children,
-//    const float theta,
-//    const float eps,
-//    const int num_of_bodies,
-//    const int num_of_nodes,
-//    const float G,
-//    const unsigned dt
-//)
-//{
-//    int g_id = get_global_id(0);
-//
-//    int p_idx = g_id;
-//
-//    while (p_idx < num_of_bodies){
-//        float3 pos_gid = (float3) {
-//            positions[p_idx * 3 + 0],
-//            positions[p_idx * 3 + 1],
-//            positions[p_idx * 3 + 2],
-//            };
-//        float mass_gid = mass[p_idx];
-//
-//        int node_idx = num_of_bodies + num_of_nodes; // Root index
-//
-//
-//
-//
-//        p_idx += get_global_size(0);
-//    }
-//
-//
-//}
-
 __kernel void calculate_force_local(
     __global float* positions,
     __global float* mass,
@@ -54,7 +15,8 @@ __kernel void calculate_force_local(
     const float dt,
     __global int *max_depth,
     __global int *errors,
-    __global float* boundaries // Min & Max
+    __global float* boundaries, // Min & Max
+    const NumericalMethod method
 )
 {
     int g_id = get_global_id(0);
@@ -69,17 +31,15 @@ __kernel void calculate_force_local(
 
 #ifdef DEBUG
 // TODO: Look out for thread divergence errors!
-//    if (g_id == 0){
-//        DEBUG_PRINT(("----FORCE CALCULATION----\n"));
-//        DEBUG_PRINT(("Theta: %f\n",theta));
-//        DEBUG_PRINT(("Max Depth Overall: %d\n",MAX_DEPTH));
-////        DEBUG_PRINT(("Max Depth of Current Step: %d\n",*max_depth));
-//        DEBUG_PRINT(("Stack Size: %d\n",MAX_DEPTH * WORKGROUP_SIZE / WARP_SIZE));
-//
-//    }
-#endif
+    if (g_id == 0){
+        DEBUG_PRINT(("----FORCE CALCULATION----\n"));
+        DEBUG_PRINT(("Theta: %f\n",theta));
+        DEBUG_PRINT(("Max Depth Overall: %d\n",MAX_DEPTH));
+//        DEBUG_PRINT(("Max Depth of Current Step: %d\n",*max_depth));
+        DEBUG_PRINT(("Stack Size: %d\n",MAX_DEPTH * WORKGROUP_SIZE / WARP_SIZE));
 
-//    DEBUG_PRINT(("OwO"));
+    }
+#endif
 
     // Select the greatest radius in one direction
     float radius = 0.5f * fmax(fmax(boundaries[3] - boundaries[0], boundaries[4] - boundaries[1]),boundaries[5] - boundaries[2]) ;
@@ -123,7 +83,7 @@ __kernel void calculate_force_local(
         barrier(CLK_LOCAL_MEM_FENCE);
 
         for (int body_idx = g_id; body_idx < num_of_bodies; body_idx += get_local_size(0) * get_num_groups(0)){
-//            DEBUG_PRINT(("[%d] Body Index: %d",g_id,body_idx));
+            DEBUG_PRINT(("[%d] Body Index: %d",g_id,body_idx));
 
             float3 position = (float3){
                 positions[body_idx * 3 + 0],
@@ -141,8 +101,7 @@ __kernel void calculate_force_local(
                 local_pos[depth] = 0;
             }
 
-            // CLK_GLOBAL_MEM_FENCE might be needed?
-            mem_fence(CLK_LOCAL_MEM_FENCE);
+            mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
 
             while (depth >= j) {
                 int top;
@@ -188,10 +147,52 @@ __kernel void calculate_force_local(
 
             acc *= G;
             // TODO: Change this when "sort" gets implemented
-//            DEBUG_PRINT(("[%d:%d:%d:%d:%d] Body Index: %d",g_id,l_id,base,sBase,j,body_idx));
-            vels[body_idx * 3 + 0] = vels[body_idx * 3 + 0] + acc.x * dt;
-            vels[body_idx * 3 + 1] = vels[body_idx * 3 + 1] + acc.y * dt;
-            vels[body_idx * 3 + 2] = vels[body_idx * 3 + 2] + acc.z * dt;
+
+//
+//            vels[body_idx * 3 + 0] = vels[body_idx * 3 + 0] + acc.x * dt;
+//            vels[body_idx * 3 + 1] = vels[body_idx * 3 + 1] + acc.y * dt;
+//            vels[body_idx * 3 + 2] = vels[body_idx * 3 + 2] + acc.z * dt;
+//
+//            positions[body_idx * 3 + 0] = positions[body_idx * 3 + 0] + vels[body_idx * 3 + 0] * dt;
+//            positions[body_idx * 3 + 1] = positions[body_idx * 3 + 1] + vels[body_idx * 3 + 1] * dt;
+//            positions[body_idx * 3 + 2] = positions[body_idx * 3 + 2] + vels[body_idx * 3 + 2] * dt;
+//            accs[body_idx * 3 + 0] = acc.x;
+//            accs[body_idx * 3 + 1] = acc.y;
+//            accs[body_idx * 3 + 2] = acc.z;
+
+            switch(method){
+
+                case Leapfrog:
+                {
+                    float v_i_half_X, v_i_half_Y, v_i_half_Z;
+                    v_i_half_X = vels[g_id * 3 + 0] + accs[g_id * 3 + 0] * dt * 0.5f;
+                    v_i_half_Y = vels[g_id * 3 + 1] + accs[g_id * 3 + 1] * dt * 0.5f;
+                    v_i_half_Z = vels[g_id * 3 + 2] + accs[g_id * 3 + 2] * dt * 0.5f;
+
+                    positions[g_id * 3 + 0] = positions[g_id * 3 + 0] + v_i_half_X * dt;
+                    positions[g_id * 3 + 1] = positions[g_id * 3 + 1] + v_i_half_Y * dt;
+                    positions[g_id * 3 + 2] = positions[g_id * 3 + 2] + v_i_half_Z * dt;
+
+                    vels[g_id * 3 + 0] = v_i_half_X + acc.x * dt * 0.5f;
+                    vels[g_id * 3 + 1] = v_i_half_Y + acc.y * dt * 0.5f;
+                    vels[g_id * 3 + 2] = v_i_half_Z + acc.z * dt * 0.5f;
+
+                } break;
+                case Euler:
+                {
+                    accs[g_id * 3 + 0] = acc.x;
+                    accs[g_id * 3 + 1] = acc.y;
+                    accs[g_id * 3 + 2] = acc.z;
+
+                    vels[g_id * 3 + 0] = vels[g_id * 3 + 0] + acc.x * dt;
+                    vels[g_id * 3 + 1] = vels[g_id * 3 + 1] + acc.y * dt;
+                    vels[g_id * 3 + 2] = vels[g_id * 3 + 2] + acc.z * dt;
+
+                    positions[g_id * 3 + 0] = positions[g_id * 3 + 0] + vels[g_id * 3 + 0] * dt;
+                    positions[g_id * 3 + 1] = positions[g_id * 3 + 1] + vels[g_id * 3 + 1] * dt;
+                    positions[g_id * 3 + 2] = positions[g_id * 3 + 2] + vels[g_id * 3 + 2] * dt;
+                } break;
+            }
         }
     }
 }
