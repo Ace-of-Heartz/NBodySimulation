@@ -89,12 +89,21 @@ struct SimulationUI
         return config;
     }
 
-    void SetUIConfig(SimulationUIConfig config) {config = config;}
+    void SetUIConfig(SimulationUIConfig config) {this->config = config;}
 
 
-    static inline const std::vector<std::pair<char*, PositionConfig>> pos_config_items = {{"Distribute in Sphere",SPHERE_POS}, {"Uniform Distribution",UNIFORM_POS}};
-    static inline const std::vector<std::pair<char*,VelocityConfig>> vel_config_items = {{"Random",RANDOM_VEL},{"Starting outwards",STARTING_OUT_VEL},{"Starting inwards",STARTING_IN_VEL},{"Functionally Zero",FUNC_ZERO_VEL},{"Tangent Direction XZ",TANGENT_XZ_VEL}};
-    static inline const std::vector<std::pair<char*, AlgorithmConfig>> algo_config_items = {{"Barnest Hut",BARNES_HUT},{"Brute force with Global Memory",BRUTE_FORCE_GLOBAL},{"Brute force with Local Memory",BRUTE_FORCE_LOCAL}};
+    static inline const std::vector<std::pair<char*, PositionConfig>> pos_config_items = {
+        {"Distribute in Sphere",SPHERE_POS},
+        {"Uniform Distribution",UNIFORM_POS}
+    };
+
+    static inline const std::vector<std::pair<char*,VelocityConfig>> vel_config_items = {
+        {"Random",RANDOM_VEL},
+        {"Starting outwards",STARTING_OUT_VEL},
+        {"Starting inwards",STARTING_IN_VEL},
+        {"Functionally Zero",FUNC_ZERO_VEL},
+        {"Tangent Direction XZ",TANGENT_XZ_VEL}
+    };
 private:
     SimulationUIConfig config;
 };
