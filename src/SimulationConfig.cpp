@@ -19,6 +19,8 @@ SimulationConfig::SimulationConfig(const SimulationConfig& other)
       mass_distr(other.mass_distr),
       algo_config(other.algo_config),
       barnes_hut_config(other.barnes_hut_config),
+      numerical_method(other.numerical_method),
+      collision(other.collision)
 {
 }
 
@@ -34,6 +36,8 @@ SimulationConfig::SimulationConfig(SimulationConfig&& other) noexcept
       mass_distr(other.mass_distr),
       algo_config(other.algo_config),
       barnes_hut_config(std::move(other.barnes_hut_config)),
+      numerical_method(other.numerical_method),
+      collision(other.collision)
 {
 }
 
@@ -52,6 +56,8 @@ SimulationConfig& SimulationConfig::operator=(const SimulationConfig& other)
     mass_distr = other.mass_distr;
     algo_config = other.algo_config;
     barnes_hut_config = other.barnes_hut_config;
+    numerical_method = other.numerical_method;
+    collision = other.collision;
     return *this;
 }
 
@@ -70,6 +76,8 @@ SimulationConfig& SimulationConfig::operator=(SimulationConfig&& other) noexcept
     mass_distr = std::move(other.mass_distr);
     algo_config = other.algo_config;
     barnes_hut_config = other.barnes_hut_config;
+    numerical_method = other.numerical_method;
+    collision = other.collision;
     return *this;
 }
 
@@ -128,6 +136,16 @@ SimulationConfig& SimulationConfig::operator=(SimulationConfig&& other) noexcept
     return barnes_hut_config;
 }
 
+NumericalMethod& SimulationConfig::GetNumericalMethod()
+{
+    return numerical_method;
+}
+
+bool& SimulationConfig::GetCollision()
+{
+    return collision;
+}
+
 void SimulationConfig::SetNumberOfBodies(const int number_of_particles)
 {
     this->num_of_bodies = number_of_particles;
@@ -181,4 +199,14 @@ void SimulationConfig::SetAlgorithmConfig(const AlgorithmConfig algo)
 void SimulationConfig::SetBarnesHutConfig(const BarnesHutConfig barnes_hut_config)
 {
     this->barnes_hut_config = barnes_hut_config;
+}
+
+void SimulationConfig::SetNumericalMethod(NumericalMethod numerical_method)
+{
+    this->numerical_method = numerical_method;
+}
+
+void SimulationConfig::SetCollision(bool collision)
+{
+    this->collision = collision;
 }

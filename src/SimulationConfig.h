@@ -4,9 +4,14 @@
 
 #ifndef SIMULATIONCONFIG_H
 #define SIMULATIONCONFIG_H
-#include <utility>
 
 #include "BarnesHutConfig.h"
+
+enum NumericalMethod
+{
+    LEAPFROG = 1,
+    EULER = 2
+};
 
 enum PositionConfig
 {
@@ -22,6 +27,7 @@ enum VelocityConfig
     FUNC_ZERO_VEL,
     TANGENT_XZ_VEL,
 };
+
 
 enum AlgorithmConfig
 {
@@ -72,8 +78,8 @@ public:
     void SetMassDistribution(const NormalDistribution& mass_distr);
     void SetAlgorithmConfig(AlgorithmConfig algo);
     void SetBarnesHutConfig(BarnesHutConfig barnes_hut_config);
-    SimulationConfig& operator=(const SimulationConfig& other)
-        this->starting_speed_mul = starting_speed_mul;
+    void SetNumericalMethod(NumericalMethod numerical_method);
+    void SetCollision(bool collision);
 
 private:
     int num_of_bodies = 20000;
@@ -85,6 +91,8 @@ private:
     int number_of_massive_objects = 0;
     float massive_object_mass = 1.0f;
 
+    bool collision = false;
+
     PositionConfig pos_config = UNIFORM_POS;
     VelocityConfig vel_config = FUNC_ZERO_VEL;
     AlgorithmConfig algo_config = BRUTE_FORCE_GLOBAL;
@@ -92,6 +100,8 @@ private:
     NormalDistribution mass_distr = NormalDistribution(0.5,0.25);
 
     BarnesHutConfig barnes_hut_config;
+
+    NumericalMethod numerical_method = EULER;
 };
 
 struct Simulation
@@ -100,7 +110,6 @@ struct Simulation
     {
         return config;
     }
-
 
     void SetConfig(const SimulationConfig& config)
     {

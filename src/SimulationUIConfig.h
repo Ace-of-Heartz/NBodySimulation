@@ -59,6 +59,11 @@ public:
         return algo_config_item;
     }
 
+    [[nodiscard]] const char* GetNumericalMethodItem() const
+    {
+        return num_method_item;
+    }
+
     void SetPositionConfigItem(const char* pos_config_item)
     {
         this->position_distr_item = pos_config_item;
@@ -74,10 +79,18 @@ public:
         this->algo_config_item = algo_config_item;
     }
 
+    void SetNumericalMethodItem(const char* num_method_item)
+    {
+        this->num_method_item = num_method_item;
+    }
+
+
+
 private:
     const char* position_distr_item = "Uniform Distribution";
     const char* velocity_distr_item = "Functionally Zero";
     const char* algo_config_item = "Brute force with Global Memory";
+    const char* num_method_item = "Euler Method";
 };
 
 struct SimulationUI
@@ -104,6 +117,18 @@ struct SimulationUI
         {"Functionally Zero",FUNC_ZERO_VEL},
         {"Tangent Direction XZ",TANGENT_XZ_VEL}
     };
+
+    static inline const std::vector<std::pair<char*, AlgorithmConfig>> algo_config_items = {
+        {"Barnest Hut",BARNES_HUT},
+        {"Brute force with Global Memory",BRUTE_FORCE_GLOBAL},
+        {"Brute force with Local Memory",BRUTE_FORCE_LOCAL}
+    };
+
+    static inline const std::vector<std::pair<char*, NumericalMethod>> num_method_config_items = {
+        {"Leapfrog Integration", LEAPFROG},
+        {"Euler Method",EULER}
+    };
+
 private:
     SimulationUIConfig config;
 };
