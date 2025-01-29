@@ -72,7 +72,7 @@ void CMyApp::SetKernelConfig()
 {
 
 
-	num_of_nodes = sim.GetConfig().GetNumberOfBodies() * 4;
+	num_of_nodes = sim.GetConfig().GetNumberOfBodies() * 2;
 	if (num_of_nodes < 1024 * max_compute_units)
 		num_of_nodes = 1024 * max_compute_units;
 	while ((num_of_nodes & (warpsize - 1)) != 0)
@@ -173,6 +173,7 @@ bool CMyApp::InitCL()
 			AppendKernelSourceCode(sourceCode,"../kernels/calculate_forces.cl");
 			AppendKernelSourceCode(sourceCode,"../kernels/brute_force_update.cl");
 			AppendKernelSourceCode(sourceCode,"../kernels/init.cl");
+			AppendKernelSourceCode(sourceCode,"../kernels/collision_update.cl");
 		}
 
 		{
@@ -201,10 +202,10 @@ bool CMyApp::InitCL()
 		kernel_parallel_reduce_root = cl::Kernel(program, "parallel_reduce_root");
 		kernel_build_tree = cl::Kernel(program, "build_tree");
 		kernel_saturate_tree = cl::Kernel(program, "saturate_tree");
-		kernel_calculate_force = cl::Kernel(program, "calculate_force_global");
+		kernel_calculate_force = cl::Kernel(program, "calculate_force_local");
 		kernel_copy = cl::Kernel(program, "copy_vertices"); //Copy from CLBuffer to GLBuffer
 		kernel_init = cl::Kernel(program, "init"); //Copy from CLBuffer to GLBuffer
-
+		kernel_collison = cl::Kernel(program, "update_collision_local");
 		InitParticles();
 	}
 	catch (cl::Error& error)
@@ -229,9 +230,12 @@ void CMyApp::InitParticles(){
     cl_temp = cl::Buffer(context, CL_MEM_READ_WRITE, workgroup_size * sizeof(float) * 4 * 2);
     cl_bottom_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * 1);
     cl_error_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * 1 * sim.GetConfig().GetNumberOfBodies());
-    cl_depth_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * 1 * sim.GetConfig().GetNumberOfBodies());
-	cl_bodycount_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * (num_of_nodes + 1));
+    cl_body_depth_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * 1 * sim.GetConfig().GetNumberOfBodies());
+    cl_max_depth_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * 1);
+	cl_bodycount_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * (num_of_nodes + 1 + sim.GetConfig().GetNumberOfBodies()));
 
+	cl_masses = cl::Buffer(context, CL_MEM_READ_WRITE,sizeof(float) * sim.GetConfig().GetNumberOfBodies());
+	cl_positions = cl::Buffer(context, CL_MEM_READ_WRITE,sizeof(float) * 3 * sim.GetConfig().GetNumberOfBodies());
 
     ///////////////////////////
     // Set-up the simulation //
@@ -252,13 +256,14 @@ bool CMyApp::SetKernelArgs()
 	kernel_init.setArg(6,sim.GetConfig().GetNumberOfBodies());
 	kernel_init.setArg(7,num_of_nodes);
 	kernel_init.setArg(8,max_children);
-	kernel_init.setArg(9,cl_depth_buffer);
+	kernel_init.setArg(9,cl_body_depth_buffer);
 
 	kernel_update.setArg(0, cl_v);
 	kernel_update.setArg(1, cl_p);
 	kernel_update.setArg(2, cl_m);
 	kernel_update.setArg(3, cl_a);
 	kernel_update.setArg(5, sim.GetConfig().GetGravitationalConstant());
+	kernel_update.setArg(6,sim.GetConfig().GetNumericalMethod());
 
 	kernel_update_local.setArg(0,cl_v);
 	kernel_update_local.setArg(1,cl_p);
@@ -266,7 +271,11 @@ bool CMyApp::SetKernelArgs()
 	kernel_update_local.setArg(3,cl_a);
 	kernel_update_local.setArg(5,sim.GetConfig().GetGravitationalConstant());
 	kernel_update_local.setArg(6,sim.GetConfig().GetNumberOfBodies());
+	kernel_update_local.setArg(7,sim.GetConfig().GetNumericalMethod());
 
+	kernel_collison.setArg(0,cl_v);
+	kernel_collison.setArg(1,cl_p);
+	kernel_collison.setArg(2,sim.GetConfig().GetNumberOfBodies());
 
 	kernel_hybrid_reduce_root.setArg(0, cl_p);
 	kernel_hybrid_reduce_root.setArg(1, cl_temp);
@@ -281,13 +290,13 @@ bool CMyApp::SetKernelArgs()
 	kernel_build_tree.setArg(1, cl_m);
 	kernel_build_tree.setArg(2, cl_boundary);
 	kernel_build_tree.setArg(3, cl_children);
-	kernel_build_tree.setArg(4,max_depth);
+	kernel_build_tree.setArg(4, cl_max_depth_buffer);
 	kernel_build_tree.setArg(5,max_children);
 	kernel_build_tree.setArg(6,sim.GetConfig().GetNumberOfBodies());
 	kernel_build_tree.setArg(7,num_of_nodes);
 	kernel_build_tree.setArg(8,cl_bottom_buffer);
 	kernel_build_tree.setArg(9,cl_error_buffer);
-	kernel_build_tree.setArg(10,cl_depth_buffer);
+	kernel_build_tree.setArg(10,cl_body_depth_buffer);
 
 	kernel_saturate_tree.setArg(0, cl_p);
 	kernel_saturate_tree.setArg(1, cl_m);
@@ -307,9 +316,10 @@ bool CMyApp::SetKernelArgs()
 	kernel_calculate_force.setArg(7, sim.GetConfig().GetNumberOfBodies());
 	kernel_calculate_force.setArg(8, num_of_nodes);
 	kernel_calculate_force.setArg(9, sim.GetConfig().GetGravitationalConstant());
-
-
-	command_queue.enqueueWriteBuffer(cl_bottom_buffer,CL_TRUE,0,sizeof(int) * 1,&bottom_value);
+	kernel_calculate_force.setArg(11, cl_max_depth_buffer);
+	kernel_calculate_force.setArg(12, cl_error_buffer);
+	kernel_calculate_force.setArg(13, cl_boundary);
+	kernel_calculate_force.setArg(14, sim.GetConfig().GetNumberOfBodies());
 
 	kernel_copy.setArg(0, cl_p);
 	kernel_copy.setArg(1, cl_vbo_mem);
@@ -332,7 +342,7 @@ bool CMyApp::InitBodyAttributes()
 
 	for (size_t i = 0; i < mass.size(); i += 4)
 	{
-		mass[i] = d(gen);
+		mass[i] = fabs(d(gen));
 	}
 
 	for (int i = 0; i < sim.GetConfig().GetNumberOfMassiveObjects(); ++i)
@@ -482,6 +492,8 @@ bool CMyApp::InitBodyAttributes()
 	auto res = command_queue.enqueueWriteBuffer(cl_v, CL_TRUE, 0, sim.GetConfig().GetNumberOfBodies() * sizeof(float) * 3, &vels[0]);
 	CL_CHECK(res);
 
+	InitObjectAcceleration();
+
 	return true;
 }
 
@@ -580,25 +592,43 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 					command_queue.enqueueNDRangeKernel(kernel_parallel_reduce_root,cl::NullRange,workgroup_size,workgroup_size);
 					command_queue.enqueueNDRangeKernel(kernel_init,cl::NullRange,global,workgroup_size);
 					command_queue.enqueueNDRangeKernel(kernel_build_tree,cl::NullRange,global,workgroup_size);
-					// command_queue.enqueueBarrierWithWaitList();
-					// command_queue.enqueueNDRangeKernel(kernel_saturate_tree,cl::NullRange,global,workgroup_size);
-					// command_queue.enqueueBarrierWithWaitList();
-					// command_queue.enqueueNDRangeKernel(kernel_calculate_force,cl::NullRange,global,workgroup_size);
-					// command_queue.enqueueBarrierWithWaitList();
+					command_queue.enqueueNDRangeKernel(kernel_saturate_tree,cl::NullRange,16*max_compute_units,16); // Only works with these values!
+					command_queue.enqueueNDRangeKernel(kernel_calculate_force,cl::NullRange,global,workgroup_size);
+
+					if (sim.GetConfig().GetCollision())
+					{
+						command_queue.enqueueNDRangeKernel(kernel_collison,cl::NullRange,global,workgroup_size);
+					}
+					command_queue.enqueueNDRangeKernel(kernel_copy,cl::NullRange,global,workgroup_size);command_queue.enqueueBarrierWithWaitList();
+
 				} break;
 				case BRUTE_FORCE_GLOBAL: {
 					cl::NDRange global(sim.GetConfig().GetNumberOfBodies());
 
 					command_queue.enqueueNDRangeKernel(kernel_update, cl::NullRange, global, cl::NullRange);
-					// command_queue.enqueueBarrierWithWaitList();
+
+					if (sim.GetConfig().GetCollision())
+					{
+						cl::NDRange globalColl( (std::ceil((float)(sim.GetConfig().GetNumberOfBodies()) / (float)(workgroup_size))) * workgroup_size );
+						command_queue.enqueueNDRangeKernel(kernel_collison,cl::NullRange,globalColl,workgroup_size);
+					}
+
+
 					command_queue.enqueueNDRangeKernel(kernel_copy,cl::NullRange,global,cl::NullRange);
+
 					command_queue.enqueueBarrierWithWaitList();
 
 					} break;
 				case BRUTE_FORCE_LOCAL: {
 					cl::NDRange global( (std::ceil((float)(sim.GetConfig().GetNumberOfBodies()) / (float)(workgroup_size))) * workgroup_size );
 					command_queue.enqueueNDRangeKernel(kernel_update_local,cl::NullRange,global,workgroup_size);
-					command_queue.enqueueNDRangeKernel(kernel_copy,cl::NullRange,global,cl::NullRange);
+
+					if (sim.GetConfig().GetCollision())
+					{
+						command_queue.enqueueNDRangeKernel(kernel_collison,cl::NullRange,global,workgroup_size);
+					}
+
+					command_queue.enqueueNDRangeKernel(kernel_copy,cl::NullRange,global,workgroup_size);
 					command_queue.enqueueBarrierWithWaitList();
 
 				} break;
@@ -713,7 +743,7 @@ void CMyApp::LogDepthBuffer()
 	log_file << "Depths\n";
 
 	std::vector<int> depth_vec(sim.GetConfig().GetNumberOfBodies(),0.0);
-	command_queue.enqueueReadBuffer(cl_depth_buffer,CL_TRUE,0,sizeof(int) * sim.GetConfig().GetNumberOfBodies(),&depth_vec[0]);
+	command_queue.enqueueReadBuffer(cl_body_depth_buffer,CL_TRUE,0,sizeof(int) * sim.GetConfig().GetNumberOfBodies(),&depth_vec[0]);
 	for (int i =0; i < depth_vec.size(); i++)
 	{
 		log_file << "\t Depth of body: " << i <<  " : " << depth_vec[i] << "\n";
@@ -822,6 +852,9 @@ void CMyApp::RenderGUI()
 
 			if(ImGui::TreeNode("Configuration"))
 			{
+
+				ImGui::Checkbox("Enable collision?",&next_config.GetCollision());
+
 				if(ImGui::BeginCombo("Algorithm",next_ui_config.GetAlgoItem()))
 				{
 					for (auto& [name,value] : SimulationUI::algo_config_items)
@@ -830,6 +863,20 @@ void CMyApp::RenderGUI()
 						{
 							next_config.SetAlgorithmConfig(value);
 							next_ui_config.SetAlgoItem(name);
+						}
+					}
+
+					ImGui::EndCombo();
+				}
+
+				if(ImGui::BeginCombo("Numerical Method",next_ui_config.GetNumericalMethodItem()))
+				{
+					for (auto& [name,value] : SimulationUI::num_method_config_items)
+					{
+						if (ImGui::Selectable(name,false))
+						{
+							next_config.SetNumericalMethod(value);
+							next_ui_config.SetNumericalMethodItem(name);
 						}
 					}
 
@@ -926,6 +973,14 @@ void CMyApp::RenderGUI()
 
 			ImGui::SliderFloat("Camera Speed:",&m_cameraManipulator.GetSpeed(),1.0f,15.0f);
 			ImGui::Checkbox("Enable render? (OpenGL)",&render);
+			if (ImGui::Button("Reset Camera"))
+			{
+				m_camera.SetView(
+                    glm::vec3(0.0, 0.0, 10.0),
+                    glm::vec3(0.0, 0.0, 0.0),
+                    glm::vec3(0.0, 1.0, 0.0));
+				m_cameraManipulator.SetCamera(&m_camera);
+			}
 			ImGui::EndMenu();
 		}
 

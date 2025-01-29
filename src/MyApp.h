@@ -46,6 +46,8 @@ struct SUpdateInfo
 };
 
 
+
+
 class CMyApp
 {
 public:
@@ -130,6 +132,7 @@ protected:
 	bool render = true;
 	long update_id = 0;
 
+
 	cl::Context context;
 	cl::CommandQueue command_queue;
 	cl::Program program;
@@ -144,6 +147,7 @@ protected:
 	cl::Kernel kernel_saturate_tree;
 	cl::Kernel kernel_calculate_force;
 	cl::Kernel kernel_bh_update;
+	cl::Kernel kernel_collison;
 
 	cl::BufferGL cl_vbo_mem;
 	cl::Buffer cl_v, cl_m ,cl_a;
@@ -156,7 +160,11 @@ protected:
 	cl::Buffer cl_bottom_buffer;
 	cl::Buffer cl_error_buffer;
 	cl::Buffer cl_bodycount_buffer;
-	cl::Buffer cl_depth_buffer;
+	cl::Buffer cl_body_depth_buffer;
+	cl::Buffer cl_max_depth_buffer;
+
+	cl::Buffer cl_positions;
+	cl::Buffer cl_masses;
 
 	float delta_time;
 	float simulation_elapsed_time = 0;
