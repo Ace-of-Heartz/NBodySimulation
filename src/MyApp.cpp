@@ -1,11 +1,11 @@
 #include "MyApp.h"
 #include "SDL_GLDebugMessageCallback.h"
-
+#include <filesystem>
+#include <fstream>
 #include <imgui.h>
 
 #include "GLUtils.hpp"
 
-#include <GL/glu.h>
 #include <math.h>
 #include <random>
 #include <glm/ext/scalar_constants.hpp>
@@ -28,6 +28,9 @@ void CMyApp::SetupDebugCallback()
 	}
 }
 
+void CMyApp::LoadTexture(const std::string& filename) {
+	m_textureID = TextureFromFile(filename.c_str());
+}
 
 bool CMyApp::InitGL()
 {
@@ -37,7 +40,7 @@ bool CMyApp::InitGL()
 	glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 
 	// Create VBO
-	vbo = initVBO( num_particles );
+	vbo = initVBO( sim.GetConfig().GetNumberOfBodies() );
 
 	// Create particle shader
 	m_program.AttachShader(GL_VERTEX_SHADER, "../shaders/particle.vert");
@@ -55,13 +58,57 @@ bool CMyApp::InitGL()
 	m_textureID = TextureFromFile("../assets/particle.png");
 
 	m_camera.SetView(
-	glm::vec3(0.0, 0.0, 9.0),
+	glm::vec3(0.0, 0.0, 10.0),
 	glm::vec3(0.0, 0.0, 0.0),
 	glm::vec3(0.0, 1.0, 0.0));
+
+
 	m_cameraManipulator.SetCamera( &m_camera );
 
 	return true;
 }
+
+void CMyApp::SetKernelConfig()
+{
+
+
+	num_of_nodes = sim.GetConfig().GetNumberOfBodies() * 2;
+	if (num_of_nodes < 1024 * max_compute_units)
+		num_of_nodes = 1024 * max_compute_units;
+	while ((num_of_nodes & (warpsize - 1)) != 0)
+		++max_compute_units;
+
+	max_children = (num_of_nodes + sim.GetConfig().GetNumberOfBodies() + 1) * 8;
+	bottom_value = num_of_nodes + sim.GetConfig().GetNumberOfBodies();
+}
+
+
+std::string CMyApp::GetBuildOptions() const
+{
+	std::string buildOptions;
+	buildOptions.reserve(1024);
+	buildOptions.append("-cl-std=CL2.0 ");
+	//buildOptions.append("-D NUMBER_OF_NODES=" + std::to_string(NUMBER_OF_NODES) + " ");
+	buildOptions.append("-D WORKGROUP_SIZE=" + std::to_string(workgroup_size) + " ");
+	//buildOptions.append("-D PARTICLE_COUNT=" + std::to_string(sim.GetConfig().GetNumberOfParticles()) + " ");
+	buildOptions.append("-I ../kernels ");
+	// buildOptions.append("-D NUMBER_OF_WORKGROUPS=" + std::to_string(NUMBER_OF_WORKGROUPS));
+
+#ifndef NDEBUG
+	buildOptions.append("-D DEBUG");
+#endif
+
+	return buildOptions;
+}
+
+void CMyApp::AppendKernelSourceCode(std::string& sourceCode,const std::string& filename )
+{
+	std::ifstream sourceFile = std::ifstream(filename.data());
+	sourceCode.append(std::istreambuf_iterator<char>(sourceFile), std::istreambuf_iterator<char>());
+	sourceFile.close();
+	sourceCode.append("\n");
+}
+
 
 bool CMyApp::InitCL()
 {  
@@ -116,14 +163,33 @@ bool CMyApp::InitCL()
 		/////////////////////////////////
 
 		// Read source file
-		std::ifstream sourceFile("../kernels/GLinterop_sol.cl");
-		std::string sourceCode(std::istreambuf_iterator<char>(sourceFile), (std::istreambuf_iterator<char>()));
+		std::string sourceCode; sourceCode.reserve(1024);
+
+		{
+			AppendKernelSourceCode(sourceCode,"../kernels/copy_vertices.cl");
+			AppendKernelSourceCode(sourceCode,"../kernels/boundary_reduce.cl");
+			AppendKernelSourceCode(sourceCode,"../kernels/build_tree.cl");
+			AppendKernelSourceCode(sourceCode,"../kernels/saturate_tree.cl");
+			AppendKernelSourceCode(sourceCode,"../kernels/calculate_forces.cl");
+			AppendKernelSourceCode(sourceCode,"../kernels/brute_force_update.cl");
+			AppendKernelSourceCode(sourceCode,"../kernels/init.cl");
+			AppendKernelSourceCode(sourceCode,"../kernels/collision_update.cl");
+		}
+
+		{
+			max_compute_units = devices[0].getInfo<CL_DEVICE_MAX_COMPUTE_UNITS>();
+			workgroup_size = devices[0].getInfo<CL_DEVICE_MAX_WORK_GROUP_SIZE>();
+
+			SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,"\n\tMax compute units: %d\n\tWarpsize: %d\n\tMax workgroup size: %d\n",max_compute_units,warpsize,workgroup_size);
+		}
+
+
 		cl::Program::Sources source(1, std::make_pair(sourceCode.c_str(), sourceCode.length()+1));
 
 		// Make program of the source code in the context
 		program = cl::Program(context, source);
 		try {
-			program.build(devices);
+			program.build(devices,GetBuildOptions().data());
 		} catch (cl::Error& error) {
 			std::cout << program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(devices[0]) << std::endl;
 			throw error;
@@ -131,7 +197,15 @@ bool CMyApp::InitCL()
 
 		// Make kernel
 		kernel_update = cl::Kernel(program, "update");
-		
+		kernel_update_local = cl::Kernel(program, "update_local");
+		kernel_hybrid_reduce_root = cl::Kernel(program, "hybrid_reduce_root");
+		kernel_parallel_reduce_root = cl::Kernel(program, "parallel_reduce_root");
+		kernel_build_tree = cl::Kernel(program, "build_tree");
+		kernel_saturate_tree = cl::Kernel(program, "saturate_tree");
+		kernel_calculate_force = cl::Kernel(program, "calculate_force_local");
+		kernel_copy = cl::Kernel(program, "copy_vertices"); //Copy from CLBuffer to GLBuffer
+		kernel_init = cl::Kernel(program, "init"); //Copy from CLBuffer to GLBuffer
+		kernel_collison = cl::Kernel(program, "update_collision_local");
 		InitParticles();
 	}
 	catch (cl::Error& error)
@@ -143,75 +217,168 @@ bool CMyApp::InitCL()
 }
 
 void CMyApp::InitParticles(){
-		cl_vbo_mem = cl::BufferGL(context, CL_MEM_WRITE_ONLY, vbo);
-		cl_v = cl::Buffer(context, CL_MEM_READ_WRITE, num_particles * sizeof(float) * 4);
-		cl_m = cl::Buffer(context, CL_MEM_READ_WRITE, num_particles * sizeof(float));
+    SetKernelConfig();
 
-		///////////////////////////
-		// Set-up the simulation //
-		///////////////////////////
+    cl_vbo_mem = cl::BufferGL(context, CL_MEM_WRITE_ONLY, vbo);
+    cl_v = cl::Buffer(context, CL_MEM_READ_WRITE, sim.GetConfig().GetNumberOfBodies() * sizeof(float) * 3);
+    cl_a = cl::Buffer(context, CL_MEM_READ_WRITE, sim.GetConfig().GetNumberOfBodies() * sizeof(float) * 3);
+    cl_p = cl::Buffer(context,CL_MEM_READ_WRITE, (sim.GetConfig().GetNumberOfBodies() + num_of_nodes + 1) * sizeof(float) * 3);
+	cl_m = cl::Buffer(context, CL_MEM_READ_WRITE,(sim.GetConfig().GetNumberOfBodies()  + num_of_nodes + 1) * sizeof(float) * 1);
 
-		InitObjectMass();
-		InitObjectPositionNVelocity();
-		kernel_update.setArg(0, cl_v);
-		kernel_update.setArg(1, cl_vbo_mem);
-		kernel_update.setArg(2, cl_m);
+    cl_boundary = cl::Buffer(context,CL_MEM_KERNEL_READ_AND_WRITE | CL_MEM_HOST_READ_ONLY, sizeof(float) * 4 * 2);
+    cl_children = cl::Buffer(context, CL_MEM_READ_WRITE, (max_children) * sizeof(int));
+    cl_temp = cl::Buffer(context, CL_MEM_READ_WRITE, workgroup_size * sizeof(float) * 4 * 2);
+    cl_bottom_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * 1);
+    cl_error_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * 1 * sim.GetConfig().GetNumberOfBodies());
+    cl_body_depth_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * 1 * sim.GetConfig().GetNumberOfBodies());
+    cl_max_depth_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * 1);
+	cl_bodycount_buffer = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * (num_of_nodes + 1 + sim.GetConfig().GetNumberOfBodies()));
+
+	cl_masses = cl::Buffer(context, CL_MEM_READ_WRITE,sizeof(float) * sim.GetConfig().GetNumberOfBodies());
+	cl_positions = cl::Buffer(context, CL_MEM_READ_WRITE,sizeof(float) * 3 * sim.GetConfig().GetNumberOfBodies());
+
+    ///////////////////////////
+    // Set-up the simulation //
+    ///////////////////////////
+    InitBodyAttributes();
+    SetKernelArgs();
+
 }
 
-bool CMyApp::InitObjectMass()
+bool CMyApp::SetKernelArgs()
 {
+	kernel_init.setArg(0,cl_p);
+	kernel_init.setArg(1,cl_m);
+	kernel_init.setArg(2,cl_children);
+	kernel_init.setArg(3,cl_error_buffer);
+	kernel_init.setArg(4,cl_boundary);
+	kernel_init.setArg(5,cl_bottom_buffer);
+	kernel_init.setArg(6,sim.GetConfig().GetNumberOfBodies());
+	kernel_init.setArg(7,num_of_nodes);
+	kernel_init.setArg(8,max_children);
+	kernel_init.setArg(9,cl_body_depth_buffer);
 
-	std::random_device rd{};
-	std::mt19937 gen{ rd() };
-	std::normal_distribution d(mass_normal.mean,mass_normal.deviation );
+	kernel_update.setArg(0, cl_v);
+	kernel_update.setArg(1, cl_p);
+	kernel_update.setArg(2, cl_m);
+	kernel_update.setArg(3, cl_a);
+	kernel_update.setArg(5, sim.GetConfig().GetGravitationalConstant());
+	kernel_update.setArg(6,sim.GetConfig().GetNumericalMethod());
 
-	std::vector<float> masses; masses.resize(num_particles,1.0);
+	kernel_update_local.setArg(0,cl_v);
+	kernel_update_local.setArg(1,cl_p);
+	kernel_update_local.setArg(2,cl_m);
+	kernel_update_local.setArg(3,cl_a);
+	kernel_update_local.setArg(5,sim.GetConfig().GetGravitationalConstant());
+	kernel_update_local.setArg(6,sim.GetConfig().GetNumberOfBodies());
+	kernel_update_local.setArg(7,sim.GetConfig().GetNumericalMethod());
 
+	kernel_collison.setArg(0,cl_v);
+	kernel_collison.setArg(1,cl_p);
+	kernel_collison.setArg(2,sim.GetConfig().GetNumberOfBodies());
 
-	for (size_t i = 0; i < num_particles; ++i)
-	{
-		masses[i] = d(gen);
-	}
+	kernel_hybrid_reduce_root.setArg(0, cl_p);
+	kernel_hybrid_reduce_root.setArg(1, cl_temp);
+	kernel_hybrid_reduce_root.setArg(2, workgroup_size * 2  * sizeof(float) * 3,nullptr);
+	kernel_hybrid_reduce_root.setArg(3, sim.GetConfig().GetNumberOfBodies());
 
-	for (int i = 0; i < num_massive_particles; ++i)
-	{
-		masses[rand() % masses.size()] = massive_particle_mass;
-	}
+	kernel_parallel_reduce_root.setArg(0, cl_p);
+	kernel_parallel_reduce_root.setArg(1, cl_boundary);
+	kernel_parallel_reduce_root.setArg(2, workgroup_size * 2  * sizeof(float) * 3,nullptr);
 
-	const cl_int res = command_queue.enqueueWriteBuffer(cl_m,CL_TRUE,0,num_particles*sizeof(float),&masses[0]);
-	CL_CHECK(res);
+	kernel_build_tree.setArg(0, cl_p);
+	kernel_build_tree.setArg(1, cl_m);
+	kernel_build_tree.setArg(2, cl_boundary);
+	kernel_build_tree.setArg(3, cl_children);
+	kernel_build_tree.setArg(4, cl_max_depth_buffer);
+	kernel_build_tree.setArg(5,max_children);
+	kernel_build_tree.setArg(6,sim.GetConfig().GetNumberOfBodies());
+	kernel_build_tree.setArg(7,num_of_nodes);
+	kernel_build_tree.setArg(8,cl_bottom_buffer);
+	kernel_build_tree.setArg(9,cl_error_buffer);
+	kernel_build_tree.setArg(10,cl_body_depth_buffer);
+
+	kernel_saturate_tree.setArg(0, cl_p);
+	kernel_saturate_tree.setArg(1, cl_m);
+	kernel_saturate_tree.setArg(2, cl_children);
+	kernel_saturate_tree.setArg(3, sim.GetConfig().GetNumberOfBodies());
+	kernel_saturate_tree.setArg(4, num_of_nodes);
+	kernel_saturate_tree.setArg(5, cl_bottom_buffer);
+	kernel_saturate_tree.setArg(6, cl_bodycount_buffer);
+
+	kernel_calculate_force.setArg(0, cl_p);
+	kernel_calculate_force.setArg(1, cl_m);
+	kernel_calculate_force.setArg(2, cl_v);
+	kernel_calculate_force.setArg(3, cl_a);
+	kernel_calculate_force.setArg(4, cl_children);
+	kernel_calculate_force.setArg(5, sim.GetConfig().GetBarnesHutConfig().GetTheta());
+	kernel_calculate_force.setArg(6, sim.GetConfig().GetBarnesHutConfig().GetEpsilon());
+	kernel_calculate_force.setArg(7, sim.GetConfig().GetNumberOfBodies());
+	kernel_calculate_force.setArg(8, num_of_nodes);
+	kernel_calculate_force.setArg(9, sim.GetConfig().GetGravitationalConstant());
+	kernel_calculate_force.setArg(11, cl_max_depth_buffer);
+	kernel_calculate_force.setArg(12, cl_error_buffer);
+	kernel_calculate_force.setArg(13, cl_boundary);
+	kernel_calculate_force.setArg(14, sim.GetConfig().GetNumberOfBodies());
+
+	kernel_copy.setArg(0, cl_p);
+	kernel_copy.setArg(1, cl_vbo_mem);
+	kernel_copy.setArg(2,sim.GetConfig().GetNumberOfBodies());
 	return true;
 }
 
 
 
-bool CMyApp::InitObjectPositionNVelocity()
-{
-	std::vector<float> attributes;
-	attributes.resize(num_particles * 4,1.0);
 
-	switch (position_distr)
+
+bool CMyApp::InitBodyAttributes()
+{
+	std::random_device rd{};
+	std::mt19937 gen{ rd() };
+	std::normal_distribution d(sim.GetConfig().GetMassDistribution().mean,sim.GetConfig().GetMassDistribution().deviation );
+
+	std::vector<float> positions(sim.GetConfig().GetNumberOfBodies() * 3);
+	std::vector<float> mass(sim.GetConfig().GetNumberOfBodies() * 1);
+
+	for (size_t i = 0; i < mass.size(); i += 4)
+	{
+		mass[i] = fabs(d(gen));
+	}
+
+	for (int i = 0; i < sim.GetConfig().GetNumberOfMassiveObjects(); ++i)
+	{
+		auto idx = rand() % sim.GetConfig().GetNumberOfMassiveObjects();
+		if (mass[idx] == sim.GetConfig().GetMassiveObjectMass())
+		{
+			--i;
+		} else
+		{
+			mass[idx] = sim.GetConfig().GetMassiveObjectMass();
+		}
+	}
+
+	command_queue.enqueueWriteBuffer(cl_m, CL_TRUE, 0, sim.GetConfig().GetNumberOfBodies() * sizeof(float), &mass[0]);
+
+	switch (sim.GetConfig().GetPositionConfig())
 	{
 	case SPHERE_POS:
 		{
-			float idx = -static_cast<float>(attributes.size()) / 2.0f;
-			const auto N = static_cast<float>(attributes.size());
-			for(size_t i = 0; i < attributes.size(); i +=4)
+			float idx = 0;
+			const float N = sim.GetConfig().GetNumberOfBodies();
+			for(size_t i = 0; i < positions.size(); i +=3)
 			{
-				auto lat = glm::asin( (idx * 2.0f) /(2.0f * N + 1.0f)) * 180.0f / glm::pi<float>();
-				//auto lon = 2.0f * glm::pi<float>() * idx / glm::golden_ratio<float>();
+				float eps = 0.5f;
 				float temp;
-				auto lon = glm::modf(idx / glm::golden_ratio<float>(),temp) * 360.0f / glm::golden_ratio<float>();
-				// attribute = glm::vec3(r * sin(lat) * sin(lon), r * cos(lon) , r * cos(lat) * sin(lon));
 
-				if (lon < -180.0f) lon += 360.0f;
-				else if (lon > 180.0f) lon -= 360.0f;
+				auto x = modf(idx / glm::golden_ratio<float>(),&temp);
+				auto y = (idx + eps) / (N - 1.0f + 2.0f * eps);
 
+				auto lat = 2.0f * glm::two_pi<float>() * x;
+				auto lon = glm::acos(1.0f - 2 * y);
 
-				attributes[i] = starting_volume_radius * sin(lat) * sin(lon);
-				attributes[i + 1] = starting_volume_radius * cos(lon);
-				attributes[i + 2] = starting_volume_radius * cos(lat) * sin(lon);
-				attributes[i + 3] = 1.0;
+				positions[i] = sim.GetConfig().GetStartingVolumeRadius() * sin(lat) * sin(lon);
+				positions[i + 1] = sim.GetConfig().GetStartingVolumeRadius() * cos(lon);
+				positions[i + 2] = sim.GetConfig().GetStartingVolumeRadius() * cos(lat) * sin(lon);
 
 				idx += 1.0f;
 			}
@@ -221,10 +388,12 @@ bool CMyApp::InitObjectPositionNVelocity()
 		{
 			std::random_device rd{};
 			std::mt19937 gen{ rd() };
-			std::normal_distribution d(0.0,0.5 );
-			for (size_t i = 0; i < attributes.size(); i += 4)
+			std::normal_distribution d(0.0f,sim.GetConfig().GetStartingVolumeRadius());
+			for (size_t i = 0; i < positions.size(); i += 3)
 			{
-				attributes[i] += d(gen); attributes[i + 1] += d(gen); attributes[i + 2] += d(gen); attributes[i + 3] += d(gen);
+				positions[i] = d(gen);
+				positions[i + 1] = d(gen);
+				positions[i + 2] = d(gen);
 			}
 		}
 		break;
@@ -233,65 +402,109 @@ bool CMyApp::InitObjectPositionNVelocity()
 
 	glBindBuffer(GL_ARRAY_BUFFER, vbo);
 	auto* values = static_cast<float*>(glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY));
-	for (size_t i = 0; i < attributes.size(); ++i)
-		values[i] = attributes[i];
+
+	int idx = 0;
+	for (size_t i = 0; i < positions.size(); i += 3)
+	{
+		values[idx] = positions[i];
+		values[idx+1] = positions[i+1];
+		values[idx+2] = positions[i+2];
+		values[idx+3] = 1.0f;
+		idx += 4;
+
+	}
 	glUnmapBuffer(GL_ARRAY_BUFFER);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-	switch (vel_distr)
+	command_queue.enqueueWriteBuffer(cl_p, CL_TRUE, 0, sim.GetConfig().GetNumberOfBodies() * sizeof(float) * 3, &positions[0]);
+
+	std::vector<float> vels(sim.GetConfig().GetNumberOfBodies() * 3,0.0);
+
+
+	switch (sim.GetConfig().GetVelocityConfig())
 	{
 	case RANDOM_VEL:
 		{
+			for (size_t i = 0; i < vels.size(); i += 3)
+			{
+				std::random_device rd{};
+				std::mt19937 gen{ rd() };
+				std::normal_distribution d(0.0f,0.1f);
+
+				auto vel = glm::normalize(glm::vec3(d(gen),d(gen),d(gen))) * sim.GetConfig().GetStartingSpeedMul();
+				vels[i] = vel.x;
+				vels[i + 1] = vel.y;
+				vels[i + 2] = vel.z;
+			}
 
 		}
 		break;
 	case STARTING_OUT_VEL:
 		{
-			for (size_t i = 0; i < attributes.size(); i += 4)
+			for (size_t i = 0; i < vels.size(); i += 3)
 			{
 
-				auto vel = glm::vec3(attributes[i],attributes[i + 1],attributes[i + 2]) ;
-				vel = glm::normalize(vel)  * starting_velocity *  1.0f;
-				attributes[i] = vel.x;
-				attributes[i + 1] = vel.y;
-				attributes[i + 2] = vel.z;
-				attributes[i + 3] = 0.0f;
+				auto vel = glm::vec3(positions[i],positions[i + 1],positions[i + 2]);
+				vel = glm::normalize(vel)  * sim.GetConfig().GetStartingSpeedMul() *  1.0f;
+				vels[i] = vel.x;
+				vels[i + 1] = vel.y;
+				vels[i + 2] = vel.z;
 			}
 		}
 		break;
 	case STARTING_IN_VEL:
 		{
-			for (size_t i = 0; i < attributes.size(); i += 4)
+			for (size_t i = 0; i < vels.size(); i += 3)
 			{
-				auto vel = glm::vec3(attributes[i],attributes[i + 1],attributes[i + 2]);
-				vel = glm::normalize(vel) * starting_velocity  * -1.0f;
-				attributes[i] = vel.x;
-				attributes[i + 1] = vel.y;
-				attributes[i + 2] = vel.z;
-				attributes[i + 3] = 0.0f;
+				auto vel = glm::vec3(positions[i],positions[i + 1],positions[i + 2]);
+				vel = glm::normalize(vel) * sim.GetConfig().GetStartingSpeedMul()  * -1.0f;
+				vels[i] = vel.x;
+				vels[i + 1] = vel.y;
+				vels[i + 2] = vel.z;
 			}
 		}
 		break;
 	case FUNC_ZERO_VEL:
 		{
-			for (size_t i = 0; i < attributes.size(); i += 4)
+			for (size_t i = 0; i < vels.size(); i += 3)
 			{
-				attributes[i] = glm::epsilon<float>();
-				attributes[i + 1] = glm::epsilon<float>();
-				attributes[i + 2] = glm::epsilon<float>();
-				attributes[i + 3] = 0.0f;
+				vels[i] = glm::epsilon<float>();
+				vels[i + 1] = glm::epsilon<float>();
+				vels[i + 2] = glm::epsilon<float>();
 			}
 
 		}
 		break;
+	case TANGENT_XZ_VEL:
+		{
+			for (size_t i = 0; i < vels.size(); i += 3)
+			{
+				auto pos = glm::vec3(positions[i],positions[i + 1],positions[i + 2]);
+				auto other = abs(glm::dot(glm::vec3(0,1,0),pos)) < glm::epsilon<float>() ? glm::cross(glm::vec3(1,0,0),pos) : glm::cross(glm::vec3(0,1,0),pos);
+				other = other * sim.GetConfig().GetStartingSpeedMul();
+				vels[i] = other.x;
+				vels[i + 1] = other.y;
+				vels[i + 2] = other.z;
+			}
+		}
+		break;
 	}
-
-	auto res = command_queue.enqueueWriteBuffer(cl_v, CL_TRUE, 0, num_particles * sizeof(float) * 4, &attributes[0]);
+	auto res = command_queue.enqueueWriteBuffer(cl_v, CL_TRUE, 0, sim.GetConfig().GetNumberOfBodies() * sizeof(float) * 3, &vels[0]);
 	CL_CHECK(res);
+
+	InitObjectAcceleration();
 
 	return true;
 }
 
+bool CMyApp::InitObjectAcceleration()
+{
+	std::vector<float> acc(sim.GetConfig().GetNumberOfBodies() * 3,0.0);
+	auto res = command_queue.enqueueWriteBuffer(cl_a,CL_TRUE,0,sim.GetConfig().GetNumberOfBodies() * sizeof(float) * 3,&acc[0]);
+	CL_CHECK(res);
+
+	return true;
+}
 
 
 
@@ -320,7 +533,6 @@ void CMyApp::CleanCL()
 {
 	cl_vbo_mem = nullptr;
 	cl_v = nullptr;
-	cl_m = nullptr;
 	program = nullptr;
 	kernel_update = nullptr;
 	command_queue = nullptr;
@@ -351,10 +563,14 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 	if (delta_time < 0.0001f) delta_time = 0.0001f;
 	// if (delta_time > 0.1f) delta_time = 0.1f;
 
-	delta_time *= speed_mult;
+	delta_time *= sim.GetSimulationSpeedMul();
 
 	simulation_elapsed_time += delta_time;
-	kernel_update.setArg(3, delta_time);
+	kernel_update.setArg(4, delta_time);
+	kernel_update_local.setArg(4, delta_time);
+	kernel_calculate_force.setArg(10, delta_time);
+
+	std::vector<int> child_vec(max_children,-1);
 
 	// CL
 	try {
@@ -364,22 +580,178 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 		// Acquire GL Objects
 		command_queue.enqueueAcquireGLObjects(&acquirable);
 		{
-			cl::NDRange global(num_particles);
 
-			// interaction & integration
-			command_queue.enqueueNDRangeKernel(kernel_update, cl::NullRange, global, cl::NullRange);
+
+
+			switch (sim.GetConfig().GetAlgorithmConfig())
+			{
+				case BARNES_HUT: {
+					cl::NDRange global((std::ceil((float)(sim.GetConfig().GetNumberOfBodies()) / (float)(workgroup_size))) * workgroup_size );
+
+					command_queue.enqueueNDRangeKernel(kernel_hybrid_reduce_root,cl::NullRange,workgroup_size*workgroup_size,workgroup_size);
+					command_queue.enqueueNDRangeKernel(kernel_parallel_reduce_root,cl::NullRange,workgroup_size,workgroup_size);
+					command_queue.enqueueNDRangeKernel(kernel_init,cl::NullRange,global,workgroup_size);
+					command_queue.enqueueNDRangeKernel(kernel_build_tree,cl::NullRange,global,workgroup_size);
+					command_queue.enqueueNDRangeKernel(kernel_saturate_tree,cl::NullRange,16*max_compute_units,16); // Only works with these values!
+					command_queue.enqueueNDRangeKernel(kernel_calculate_force,cl::NullRange,global,workgroup_size);
+
+					if (sim.GetConfig().GetCollision())
+					{
+						command_queue.enqueueNDRangeKernel(kernel_collison,cl::NullRange,global,workgroup_size);
+					}
+					command_queue.enqueueNDRangeKernel(kernel_copy,cl::NullRange,global,workgroup_size);command_queue.enqueueBarrierWithWaitList();
+
+				} break;
+				case BRUTE_FORCE_GLOBAL: {
+					cl::NDRange global(sim.GetConfig().GetNumberOfBodies());
+
+					command_queue.enqueueNDRangeKernel(kernel_update, cl::NullRange, global, cl::NullRange);
+
+					if (sim.GetConfig().GetCollision())
+					{
+						cl::NDRange globalColl( (std::ceil((float)(sim.GetConfig().GetNumberOfBodies()) / (float)(workgroup_size))) * workgroup_size );
+						command_queue.enqueueNDRangeKernel(kernel_collison,cl::NullRange,globalColl,workgroup_size);
+					}
+
+
+					command_queue.enqueueNDRangeKernel(kernel_copy,cl::NullRange,global,cl::NullRange);
+
+					command_queue.enqueueBarrierWithWaitList();
+
+					} break;
+				case BRUTE_FORCE_LOCAL: {
+					cl::NDRange global( (std::ceil((float)(sim.GetConfig().GetNumberOfBodies()) / (float)(workgroup_size))) * workgroup_size );
+					command_queue.enqueueNDRangeKernel(kernel_update_local,cl::NullRange,global,workgroup_size);
+
+					if (sim.GetConfig().GetCollision())
+					{
+						command_queue.enqueueNDRangeKernel(kernel_collison,cl::NullRange,global,workgroup_size);
+					}
+
+					command_queue.enqueueNDRangeKernel(kernel_copy,cl::NullRange,global,workgroup_size);
+					command_queue.enqueueBarrierWithWaitList();
+
+				} break;
+				default: {
+
+				} break;
+
+			}
 
 			// Wait for all computations to finish
+			if (log_updates && update_id % 20 == 0)
+			{
+				LogState();
+			}
+
 			command_queue.finish();
+
 		}
 		// Release GL Objects
 		command_queue.enqueueReleaseGLObjects(&acquirable);
+		++update_id;
 
 	} catch (cl::Error error) {
 		SDL_LogError(SDL_LOG_CATEGORY_APPLICATION,"%s (%s)", error.what(),oclErrorString(error.err()) );
 		exit(1);
 	}
 }
+
+void CMyApp::LogState()
+{
+
+	if (update_id == 0)
+	{
+		log_file.open(filename);
+	}else
+	{
+		log_file.open(filename,std::ios::app);
+	}
+
+	if (!log_file.is_open())
+	{
+		throw std::runtime_error("Could not open log file.");
+	}
+
+	log_file << update_id << std::endl;
+
+	int err;
+	command_queue.enqueueReadBuffer(cl_error_buffer,CL_TRUE,0,sizeof(int) * 1,&err);
+	if (err == 1)
+	{
+		log_file << "Error occured!" << std::endl;
+	}
+
+	LogChildrenBuffer();
+	LogPositionBuffer();
+	LogDepthBuffer();
+	LogErrors("kernel_build_tree");
+
+	log_file.close();
+}
+
+void CMyApp::LogChildrenBuffer()
+{
+	log_file << "Children Buffer:\n";
+
+	std::vector<int> child_vec(max_children,-1);
+	command_queue.enqueueReadBuffer(cl_children,CL_TRUE,0,sizeof(int) * max_children,&child_vec[0]);
+
+	// std::ostream_iterator<int> output_iterator(log_file, "\n\t");
+	// std::ranges::copy(child_vec, output_iterator);
+
+	for (int i = 0; i < child_vec.size(); i++)
+	{
+		log_file << (child_vec[i] < sim.GetConfig().GetNumberOfBodies() ? (child_vec[i] == -1 ? "\tUnassigned : " : "\tBody : ") :  "\tNode : ")  << i  << " : " << child_vec[i] << "\n";
+	}
+}
+
+void CMyApp::LogAccelerationBuffer()
+{
+
+}
+
+void CMyApp::LogPositionBuffer()
+{
+	log_file << "Position Buffer:\n";
+	std::vector<float> position_vec((num_of_nodes + sim.GetConfig().GetNumberOfBodies() + 1) * 3, -1.0f);
+	command_queue.enqueueReadBuffer(cl_p, CL_TRUE,0, sizeof(float) * position_vec.size(), &position_vec[0]);
+
+	for (int i = 0; i < position_vec.size(); i += 3)
+	{
+		log_file << (i < sim.GetConfig().GetNumberOfBodies() ? "\tBody : " :"\tNode : ") << i << " : " << position_vec[i] << "," << position_vec[i + 1] << "," << position_vec[i+2]  << "\n";
+	}
+
+}
+
+void CMyApp::LogErrors(std::string step)
+{
+	log_file << "Errors at " << step << "\n";
+
+	std::vector<int> err_vec(sim.GetConfig().GetNumberOfBodies(),0.0);
+	command_queue.enqueueReadBuffer(cl_error_buffer,CL_TRUE,0,sizeof(int) * sim.GetConfig().GetNumberOfBodies(),&err_vec[0]);
+	for (int i =0; i < err_vec.size(); i++)
+	{
+		log_file << "\t" << i <<  " : " << err_vec[i] << "\n";
+	}
+
+
+}
+
+void CMyApp::LogDepthBuffer()
+{
+	log_file << "Depths\n";
+
+	std::vector<int> depth_vec(sim.GetConfig().GetNumberOfBodies(),0.0);
+	command_queue.enqueueReadBuffer(cl_body_depth_buffer,CL_TRUE,0,sizeof(int) * sim.GetConfig().GetNumberOfBodies(),&depth_vec[0]);
+	for (int i =0; i < depth_vec.size(); i++)
+	{
+		log_file << "\t Depth of body: " << i <<  " : " << depth_vec[i] << "\n";
+	}
+}
+
+
+
 
 #pragma endregion
 
@@ -391,7 +763,7 @@ void CMyApp::RenderVBO( int vbolen )
 	{
 		// Shader program parameters
 		auto viewProj = m_camera.GetViewProj();
-		m_program.SetUniform("particle_size", particle_size);
+		m_program.SetUniform("particle_size", sim.GetParticleSize());
 		m_program.SetUniform("viewProj",viewProj);
 		m_program.SetTexture("tex0", 0, m_textureID);
 
@@ -419,36 +791,44 @@ void CMyApp::Render()
 	glDepthMask(GL_FALSE);
 
 	// GL
-	RenderVBO( num_particles );
-}  
+	if (render)
+	{
+		RenderVBO( sim.GetConfig().GetNumberOfBodies() );
+	}
+}
 
 void CMyApp::RenderGUI()
 {
 
-	static int next_num_particles = num_particles;
+
 
 	if(ImGui::BeginMainMenuBar())
 	{
 		if(ImGui::BeginMenu("Information"))
 		{
 
-			ImGui::Text("Number of particles: %d", num_particles);
-			ImGui::Text("Starting distribution: %s");
+			ImGui::Text("Number of particles: %d", sim.GetConfig().GetNumberOfBodies());
+			ImGui::Text("Starting position distribution: %s",sim_ui.GetUIConfig().GetPositionConfigItem());
+			ImGui::Text("Starting velocity distribution: %s",sim_ui.GetUIConfig().GetVelocityConfigItem());
 
-			// auto curr = std::chrono::system_clock::now();
+
 			long to_long_milli = simulation_elapsed_time * 60;
 			ImGui::Text("Time of simulation: %d:%d:%d" ,
-				// std::chrono::duration_cast<std::chrono::minutes>(curr - start_time).count() % 60,
-				// std::chrono::duration_cast<std::chrono::seconds>(curr - start_time).count() % 60,
-				// std::chrono::duration_cast<std::chrono::milliseconds>(curr - start_time).count() % 60
-				(to_long_milli / 60) / (60 ),
-				(to_long_milli / 60) % 60,
+
+				to_long_milli / 60 / 60,
+				to_long_milli / 60 % 60,
 				to_long_milli % 60
 				);
 
 			ImGui::Separator();
 			ImGui::Text("Last Frame");
 			ImGui::Text("Avg. framerate");
+			ImGui::Separator();
+			if (ImGui::TreeNode("Barnes Hut"))
+			{
+				ImGui::Text("Number of Nodes: %d",num_of_nodes);
+				ImGui::TreePop();
+			}
 
 
 			ImGui::EndMenu();
@@ -458,121 +838,127 @@ void CMyApp::RenderGUI()
 		if(ImGui::BeginMenu("Controls"))
 		{
 
-			ImGui::SliderFloat("Simulation Speed",&speed_mult,0.001,1.5);
+			ImGui::SliderFloat("Simulation Speed",&sim.GetSimulationSpeedMul(),0.001,1.5);
 
 
 			ImGui::Separator();
 
-			if(ImGui::Button("Restart"))
+			if(ImGui::Button("Reset"))
 			{
-				//Clean();
-				num_particles = next_num_particles;
-
-				if(vbo){
-					glBindBuffer(GL_ARRAY_BUFFER, vbo);
-					glBufferData(GL_ARRAY_BUFFER, num_particles*sizeof(float) * 4, 0, GL_DYNAMIC_DRAW);
-					glBindBuffer(GL_ARRAY_BUFFER, 0);
-				}
-
-				InitParticles();
-				//if (!InitGL() )
-				//{
-				//	throw std::runtime_error("Failed to initialize OpenGL context");
-				//}
-				//if (!InitCL())
-				//{
-				//	throw std::runtime_error("Failed to initialize CL context");
-				//}
-				//if (!InitMisc())
-				//{
-				//	throw std::runtime_error("Failed to initialize Misc");
-				//}
-
-				//InitGL();
-				//InitCL();
-				//InitMisc();
+				ResetSimulation();
 			}
 
 			ImGui::Separator();
 
 			if(ImGui::TreeNode("Configuration"))
 			{
-				ImGui::InputInt("Particle Count:",&next_num_particles);
+
+				ImGui::Checkbox("Enable collision?",&next_config.GetCollision());
+
+				if(ImGui::BeginCombo("Algorithm",next_ui_config.GetAlgoItem()))
+				{
+					for (auto& [name,value] : SimulationUI::algo_config_items)
+					{
+						if (ImGui::Selectable(name,false))
+						{
+							next_config.SetAlgorithmConfig(value);
+							next_ui_config.SetAlgoItem(name);
+						}
+					}
+
+					ImGui::EndCombo();
+				}
+
+				if(ImGui::BeginCombo("Numerical Method",next_ui_config.GetNumericalMethodItem()))
+				{
+					for (auto& [name,value] : SimulationUI::num_method_config_items)
+					{
+						if (ImGui::Selectable(name,false))
+						{
+							next_config.SetNumericalMethod(value);
+							next_ui_config.SetNumericalMethodItem(name);
+						}
+					}
+
+					ImGui::EndCombo();
+				}
+
+
+				ImGui::InputInt("Particle Count:",&next_config.GetNumberOfBodies());
 				if(ImGui::BeginItemTooltip())
 				{
 					ImGui::Text("Recommended values: 10.000 - 75.000");
 					ImGui::EndTooltip();
 				}
 
-				ImGui::SliderFloat("Gravitational Constant",&gravitational_constant,0.00001,1.0f);
+				// ImGui::SliderFloat("Gravitational Constant Slider",&next_config.GetGravitationalConstant(),1e-11,0.1f,"%.11f");
+				ImGui::InputFloat("Gravitational Constant",&next_config.GetGravitationalConstant(),1e-6,1e-3,"%.11f");
 
-				if (ImGui::TreeNode("Particle Distributions"))
+				if (ImGui::TreeNode("Particle Distributions & Settings"))
 				{
-					if(ImGui::BeginCombo("Position Distribution",""))
+
+					if(ImGui::TreeNode("Position"))
 					{
-						if(ImGui::Selectable("Uniform"))
+
+						if(ImGui::BeginCombo("Position Distribution",next_ui_config.GetPositionConfigItem()))
 						{
 
+							for (auto& [name,value] : SimulationUI::pos_config_items)
+							{
+								if (ImGui::Selectable(name,false))
+								{
+									next_config.SetPositionConfig(value);
+									next_ui_config.SetPositionConfigItem(name);
+								}
+							}
+
+
+							ImGui::EndCombo();
 						}
 
-						if(ImGui::Selectable("Ring"))
-						{
 
-						}
-
-						ImGui::EndCombo();
+						ImGui::SliderFloat("Starting Volume Radius:",&next_config.GetStartingVolumeRadius(),0.0f,10.0f);
+						ImGui::TreePop();
 					}
 
-					if(ImGui::BeginCombo("Velocity Distribution",""))
+
+
+					if (ImGui::TreeNode("Velocity"))
 					{
-						if(ImGui::Selectable("Random"))
+						if (ImGui::InputFloat("Starting Velocity:", &next_config.GetStartingSpeedMul()),1,10)
+
+						if(ImGui::BeginCombo("Velocity Distribution",next_ui_config.GetVelocityConfigItem()))
 						{
+							for (auto& [name,value] : SimulationUI::vel_config_items)
+							{
+								if (ImGui::Selectable(name))
+								{
+									next_config.SetVelocityConfig(value);
+									next_ui_config.SetVelocityConfigItem(name);
+								}
+							}
 
+							ImGui::EndCombo();
 						}
-
-						if(ImGui::Selectable("Starting outwards"))
-						{
-
-						}
-
-						if(ImGui::Selectable("Starting inwards"))
-						{
-
-						}
-
-						if(ImGui::Selectable("Functionally Zero"))
-						{
-
-						}
-
-
-						ImGui::EndCombo();
+						ImGui::TreePop();
 					}
 
-					if (ImGui::BeginCombo("Mass distribution",""))
+					if(ImGui::TreeNode("Mass"))
 					{
-						if(ImGui::Selectable("Black hole"))
-						{
+						ImGui::SliderFloat("Mass Distribution Mean",&next_config.GetMassDistribution().mean,0.0f,100.0f);
+						ImGui::SliderFloat("Mass Distribution Deviation",&next_config.GetMassDistribution().deviation,0,next_config.GetMassDistribution().mean);
+						if (next_config.GetMassDistribution().deviation > next_config.GetMassDistribution().mean) next_config.GetMassDistribution().deviation = next_config.GetMassDistribution().mean;
 
-						}
-						if(ImGui::Selectable("Uniform"))
-						{
-
-						}
-						if (ImGui::Selectable("Equal"))
-						{
-
-						}
-						if (ImGui::Selectable("Random"))
-						{
-
-						}
-						ImGui::EndCombo();
+						ImGui::InputInt("Number of Massive Particles:",&next_config.GetNumberOfMassiveObjects(),1,10);
+						if (next_config.GetNumberOfMassiveObjects() > next_config.GetNumberOfBodies()) next_config.GetNumberOfBodies() = next_config.GetNumberOfMassiveObjects();
+						ImGui::SliderFloat("Mass of Massive Particles:",&next_config.GetMassiveObjectMass(),0.0f,100000.0f);
+						ImGui::TreePop();
 					}
-
 
 					ImGui::TreePop();
+
 				}
+
 
 
 				ImGui::TreePop();
@@ -580,10 +966,48 @@ void CMyApp::RenderGUI()
 			ImGui::EndMenu();
 		}
 
+		if(ImGui::BeginMenu("View"))
+		{
+			ImGui::SliderFloat("Particle Size:",&sim.GetParticleSize(),0.05f,1.0f);
+
+
+			ImGui::SliderFloat("Camera Speed:",&m_cameraManipulator.GetSpeed(),1.0f,15.0f);
+			ImGui::Checkbox("Enable render? (OpenGL)",&render);
+			if (ImGui::Button("Reset Camera"))
+			{
+				m_camera.SetView(
+                    glm::vec3(0.0, 0.0, 10.0),
+                    glm::vec3(0.0, 0.0, 0.0),
+                    glm::vec3(0.0, 1.0, 0.0));
+				m_cameraManipulator.SetCamera(&m_camera);
+			}
+			ImGui::EndMenu();
+		}
+
+		if(ImGui::BeginMenu("Debug"))
+		{
+			ImGui::Checkbox("Kernel debug mode",&kernel_debug);
+			ImGui::Checkbox("Log updates:",&log_updates);
+			ImGui::EndMenu();
+		}
 
 		ImGui::EndMainMenuBar();
 	}
 
+}
+
+void CMyApp::ResetSimulation()
+{
+	sim_ui.SetUIConfig(next_ui_config);
+	sim.SetConfig(next_config);
+
+	if(vbo){
+		glBindBuffer(GL_ARRAY_BUFFER, vbo);
+		glBufferData(GL_ARRAY_BUFFER, sim.GetConfig().GetNumberOfBodies()*sizeof(float) * 4, 0, GL_DYNAMIC_DRAW);
+		glBindBuffer(GL_ARRAY_BUFFER, 0);
+	}
+
+	InitParticles();
 }
 
 
@@ -595,6 +1019,13 @@ void CMyApp::RenderGUI()
 
 void CMyApp::KeyboardDown(SDL_KeyboardEvent& key)
 {
+	switch (key.keysym.sym)
+	{
+		case SDLK_r:
+			ResetSimulation();
+
+	}
+
 	m_cameraManipulator.KeyboardDown( key );
 }
 
@@ -632,13 +1063,20 @@ void CMyApp::Resize(int _w, int _h)
 	m_camera.SetAspect(static_cast<float>(_w) / _h);
 }
 
-void CMyApp::OtherEvent(SDL_Event&)
+void CMyApp::OtherEvent(SDL_Event& ev)
 {
+	if ( ev.type == SDL_DROPFILE || ev.type == SDL_DROPTEXT) {
 
+		std::string filename = std::string(ev.drop.file);
+
+		if (filename.rfind(".png") != std::string::npos) {
+			LoadTexture(filename);
+		}
+		SDL_free(ev.drop.file);
+	}
 }
 
-
-CMyApp::CMyApp(void)
+CMyApp::CMyApp(void) : sim(), next_config(), sim_ui(), next_ui_config()
 {
 }
 
