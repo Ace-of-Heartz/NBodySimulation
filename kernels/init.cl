@@ -28,7 +28,7 @@ __kernel void init(
         positions[(num_of_bodies + num_of_nodes) * 3 + 0] = (boundaries[0] + boundaries[3]) / 2.0f;
         positions[(num_of_bodies + num_of_nodes) * 3 + 1] = (boundaries[1] + boundaries[4]) / 2.0f;
         positions[(num_of_bodies + num_of_nodes) * 3 + 2] = (boundaries[2] + boundaries[5]) / 2.0f;
-        mass[num_of_nodes + num_of_bodies] = -1.0;
+        mass[num_of_nodes + num_of_bodies] = -1.0f;
         *bottom = num_of_nodes + num_of_bodies;
     }
 

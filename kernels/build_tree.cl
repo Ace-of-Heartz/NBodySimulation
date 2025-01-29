@@ -1,13 +1,15 @@
 #include "common.hcl"
 #include "build_tree.hcl"
 
+
+
 __attribute__ ((reqd_work_group_size(WORKGROUP_SIZE, 1, 1)))
 __kernel void build_tree(
     __global float *positions,   // Node and body positions
     __global volatile float *mass,
     __global float *boundaries,  // Root boundary max and min
     __global volatile int *children,      // Array holding indexes to bodies and nodes
-    const unsigned max_depth,
+    __global volatile int *max_depth,
     const unsigned max_children, // Size of children
     const int num_of_bodies,
     const int num_of_nodes,
@@ -21,7 +23,7 @@ __kernel void build_tree(
 
 #ifdef DEBUG
     if (g_id == 0){
-        DEBUG_PRINT(("----BUILD TREE KERNEL----\nMax Depth: %d\nMax children: %d\nNumber of bodies: %d\nNumber of Nodes: %d\n",max_depth,max_children,num_of_bodies,num_of_nodes));
+        DEBUG_PRINT(("----BUILD TREE KERNEL----\nMax Depth: %d\nMax children: %d\nNumber of bodies: %d\nNumber of Nodes: %d\n",*max_depth,max_children,num_of_bodies,num_of_nodes));
     }
 #endif
     //Cache local variables
@@ -29,16 +31,18 @@ __kernel void build_tree(
     float massIdx;
     float3 position;
 
+    int local_max_depth = 1;
+
     int p_idx = g_id;
     int child_path = 0;
     int child_idx = 0;
     int node_idx = num_of_nodes + num_of_bodies;
 
-
     bool new_body = true;
 
     while (p_idx < num_of_bodies)
     {
+
 
         if (new_body)
         {
@@ -95,11 +99,12 @@ __kernel void build_tree(
                     float3 og_boundary_min,og_boundary_max;
                     og_boundary_min = boundaryMin;
                     og_boundary_max = boundaryMax;
-//
+
 //                    DEBUG_PRINT(("\t[%d] Distance: %f",g_id,distance(position,og_position)));
 //                    DEBUG_PRINT(("\t[%d] Position: (%f,%f,%f) (%f,%f,%f)",g_id,position.x,position.y,position.z,og_position.x,og_position.y,og_position.z));
 
                     do {
+                        ++body_depth[p_idx];
                         const int cell = atom_dec(bottom) - 1;
                         if (cell <= num_of_bodies){
 //                            DEBUG_PRINT(("\t\t[%d] ERROR: Cell capacity overflow: %d",g_id,cell));
@@ -138,13 +143,16 @@ __kernel void build_tree(
 
 
                     children[NUMBER_OF_CELLS * node_idx + child_path] = p_idx;
-                    DEBUG_PRINT(("[%d : %d] Insert body %d at %d",g_id,l_id,p_idx,NUMBER_OF_CELLS * node_idx + child_path));
+//                    DEBUG_PRINT(("[%d : %d] Insert body %d at %d",g_id,l_id,p_idx,NUMBER_OF_CELLS * node_idx + child_path));
                     atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE,memory_order_seq_cst,memory_scope_device);
                     children[locked] = patch;
 
                 }
 
-                p_idx += get_global_size(0);
+                // Needed for later force calculation!
+                local_max_depth = max(body_depth[p_idx],local_max_depth);
+
+                p_idx += get_global_size(0); //Stepsize: Equals with `get_num_groups(0) * get_local_size(0);`
                 new_body = true;
             }
 
@@ -153,6 +161,6 @@ __kernel void build_tree(
 
     }
 
-
+    atom_max(max_depth,local_max_depth);
 
 }
