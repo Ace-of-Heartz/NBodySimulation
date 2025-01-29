@@ -79,7 +79,7 @@ int main( int argc, char* args[] )
     }	
 
 
-	SDL_GL_SetSwapInterval(0);
+	SDL_GL_SetSwapInterval(1);
 
 
 	GLenum error = glewInit();

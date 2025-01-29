@@ -54,19 +54,30 @@ public:
         return velocity_distr_item;
     }
 
-    void SetPositionConfigItem(const char* const pos_config_item)
+    [[nodiscard]] const char* GetAlgoItem() const
+    {
+        return algo_config_item;
+    }
+
+    void SetPositionConfigItem(const char* pos_config_item)
     {
         this->position_distr_item = pos_config_item;
     }
 
-    void SetVelocityConfigItem(const char* const vel_config_item)
+    void SetVelocityConfigItem(const char* vel_config_item)
     {
         this->velocity_distr_item = vel_config_item;
+    }
+
+    void SetAlgoItem(const char* algo_config_item)
+    {
+        this->algo_config_item = algo_config_item;
     }
 
 private:
     const char* position_distr_item = "Uniform Distribution";
     const char* velocity_distr_item = "Functionally Zero";
+    const char* algo_config_item = "Brute force with Global Memory";
 };
 
 struct SimulationUI
@@ -82,8 +93,8 @@ struct SimulationUI
 
 
     static inline const std::vector<std::pair<char*, PositionConfig>> pos_config_items = {{"Distribute in Sphere",SPHERE_POS}, {"Uniform Distribution",UNIFORM_POS}};
-    static inline const std::vector<std::pair<char*,VelocityConfig>> vel_config_items = {{"Random",RANDOM_VEL},{"Starting outwards",STARTING_OUT_VEL},{"Starting inwards",STARTING_IN_VEL},{"Functionally Zero",FUNC_ZERO_VEL}};
-
+    static inline const std::vector<std::pair<char*,VelocityConfig>> vel_config_items = {{"Random",RANDOM_VEL},{"Starting outwards",STARTING_OUT_VEL},{"Starting inwards",STARTING_IN_VEL},{"Functionally Zero",FUNC_ZERO_VEL},{"Tangent Direction XZ",TANGENT_XZ_VEL}};
+    static inline const std::vector<std::pair<char*, AlgorithmConfig>> algo_config_items = {{"Barnest Hut",BARNES_HUT},{"Brute force with Global Memory",BRUTE_FORCE_GLOBAL},{"Brute force with Local Memory",BRUTE_FORCE_LOCAL}};
 private:
     SimulationUIConfig config;
 };

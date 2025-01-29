@@ -20,7 +20,7 @@ public:
     void Update( float _deltaTime );
 
 	inline void  SetSpeed(float _speed) { m_speed = _speed; }
-	inline float GetSpeed() const noexcept { return m_speed; }
+	inline float& GetSpeed() noexcept { return m_speed; }
 
 	void KeyboardDown(const SDL_KeyboardEvent& key);
 	void KeyboardUp(const SDL_KeyboardEvent& key);

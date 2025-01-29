@@ -77,11 +77,25 @@ public:
 	void Resize(int, int);
 protected:
 
-	bool InitObjectMass();
-	bool InitObjectPositionNVelocity();
+	bool InitBodyAttributes();
+	bool InitObjectAcceleration();
+	bool SetKernelArgs();
 
 	void CleanGL();
 	void CleanCL();
+
+	std::string filename = "log.txt";
+	std::ofstream log_file;
+	void LogState();
+	void LogChildrenBuffer();
+	void LogPositionBuffer();
+	void LogVelocityBuffer();
+	void LogAccelerationBuffer();
+	void LogMassBuffer();
+	void LogErrors(std::string);
+	void LogDepthBuffer();
+
+	void ResetSimulation();
 	// GL
 	int windowH, windowW;
 	GLuint m_vaoID, vbo, texture;
@@ -89,60 +103,63 @@ protected:
 
 	void LoadTexture(const std::string&);
 
+	std::string GetBuildOptions() const;
+	void SetKernelConfig();
+	void AppendKernelSourceCode(std::string&,const std::string&);
+
 	// Camera
 	Camera m_camera;
 	CameraManipulator m_cameraManipulator;
 
 
-
 	// CL
 
-	const int WORKGROUP_SIZE = 256;
+	int workgroup_size = 16;
+	int num_of_nodes;
+	int num_of_workgroups;
+	int warpsize = 16;
+	int max_compute_units;
+
+	bool kernel_debug = true;
+
+	unsigned int max_children;
+	unsigned int max_depth = 32;
+	int bottom_value = 0;
+
+	bool log_updates = false;
+	bool render = true;
+	long update_id = 0;
 
 	cl::Context context;
 	cl::CommandQueue command_queue;
 	cl::Program program;
 
+	cl::Kernel kernel_init;
 	cl::Kernel kernel_update;
+	cl::Kernel kernel_update_local;
+	cl::Kernel kernel_copy;
 	cl::Kernel kernel_hybrid_reduce_root;
 	cl::Kernel kernel_parallel_reduce_root;
 	cl::Kernel kernel_build_tree;
+	cl::Kernel kernel_saturate_tree;
+	cl::Kernel kernel_calculate_force;
+	cl::Kernel kernel_bh_update;
 
 	cl::BufferGL cl_vbo_mem;
-	cl::Buffer cl_v, cl_m;
+	cl::Buffer cl_v, cl_m ,cl_a;
 
 	cl::Buffer cl_temp;
 
-
-	typedef struct __attribute__ ((packed)) Node{
-		cl_float4 position;
-		cl_float4 centerOfMassAndMass; // xyz - Center of Mass | w - Overall Mass
-	} Node;
-
-	cl::Buffer cl_tree;
+	cl::Buffer cl_p;
+	cl::Buffer cl_children;
 	cl::Buffer cl_boundary;
-
+	cl::Buffer cl_bottom_buffer;
+	cl::Buffer cl_error_buffer;
+	cl::Buffer cl_bodycount_buffer;
+	cl::Buffer cl_depth_buffer;
 
 	float delta_time;
 	float simulation_elapsed_time = 0;
-
-	// float speed_mult = 1.0;
-	// int num_particles = 25000;
-	// float gravitational_constant = 6.67e-11;
-	//
-	//
-	// float particle_size = 0.05f;
-	//
-	//
-	// PositionConfig position_distr = SPHERE_POS;
-	// VelocityConfig vel_distr = FUNC_ZERO_VEL;
-	// NormalDistribution mass_normal = NormalDistribution(0.5,0.2);
-	//
-	// int num_massive_particles = 3;
-	// float massive_particle_mass = 2;
-	//
-	// float starting_velocity = 1.0f;
-	// float starting_volume_radius = 0.5f;
 
 	Simulation sim;
 	SimulationConfig next_config;
