@@ -1,6 +1,5 @@
 #include "common.hcl"
 
-__attribute__ ((reqd_work_group_size(WORKGROUP_SIZE, 1, 1)))
 __kernel void copy_vertices (
     __global float *p,
     __global float4 *v,
