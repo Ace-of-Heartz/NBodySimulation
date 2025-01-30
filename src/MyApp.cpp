@@ -202,7 +202,7 @@ bool CMyApp::InitCL()
 		kernel_calculate_force = cl::Kernel(program, "calculate_force_local");
 		kernel_copy = cl::Kernel(program, "copy_vertices"); //Copy from CLBuffer to GLBuffer
 		kernel_init = cl::Kernel(program, "init"); //Copy from CLBuffer to GLBuffer
-		kernel_collison = cl::Kernel(program, "update_collision_local");
+		kernel_collision = cl::Kernel(program, "update_collision_local");
 		InitParticles();
 	}
 	catch (cl::Error& error)
