@@ -76,7 +76,7 @@ void CMyApp::SetKernelConfig()
 	if (num_of_nodes < 1024 * max_compute_units)
 		num_of_nodes = 1024 * max_compute_units;
 	while ((num_of_nodes & (warpsize - 1)) != 0)
-		++max_compute_units;
+		++num_of_nodes;
 
 	max_children = (num_of_nodes + sim.GetConfig().GetNumberOfBodies() + 1) * 8;
 	bottom_value = num_of_nodes + sim.GetConfig().GetNumberOfBodies();
@@ -88,11 +88,8 @@ std::string CMyApp::GetBuildOptions() const
 	std::string buildOptions;
 	buildOptions.reserve(1024);
 	buildOptions.append("-cl-std=CL2.0 ");
-	//buildOptions.append("-D NUMBER_OF_NODES=" + std::to_string(NUMBER_OF_NODES) + " ");
 	buildOptions.append("-D WORKGROUP_SIZE=" + std::to_string(workgroup_size) + " ");
-	//buildOptions.append("-D PARTICLE_COUNT=" + std::to_string(sim.GetConfig().GetNumberOfParticles()) + " ");
 	buildOptions.append("-I ../kernels ");
-	// buildOptions.append("-D NUMBER_OF_WORKGROUPS=" + std::to_string(NUMBER_OF_WORKGROUPS));
 
 #ifndef NDEBUG
 	buildOptions.append("-D DEBUG");
@@ -273,9 +270,9 @@ bool CMyApp::SetKernelArgs()
 	kernel_update_local.setArg(6,sim.GetConfig().GetNumberOfBodies());
 	kernel_update_local.setArg(7,sim.GetConfig().GetNumericalMethod());
 
-	kernel_collison.setArg(0,cl_v);
-	kernel_collison.setArg(1,cl_p);
-	kernel_collison.setArg(2,sim.GetConfig().GetNumberOfBodies());
+	kernel_collision.setArg(0,cl_v);
+	kernel_collision.setArg(1,cl_p);
+	kernel_collision.setArg(2,sim.GetConfig().GetNumberOfBodies());
 
 	kernel_hybrid_reduce_root.setArg(0, cl_p);
 	kernel_hybrid_reduce_root.setArg(1, cl_temp);
@@ -340,7 +337,7 @@ bool CMyApp::InitBodyAttributes()
 	std::vector<float> positions(sim.GetConfig().GetNumberOfBodies() * 3);
 	std::vector<float> mass(sim.GetConfig().GetNumberOfBodies() * 1);
 
-	for (size_t i = 0; i < mass.size(); i += 4)
+	for (size_t i = 0; i < mass.size(); ++i)
 	{
 		mass[i] = fabs(d(gen));
 	}
@@ -506,8 +503,6 @@ bool CMyApp::InitObjectAcceleration()
 	return true;
 }
 
-
-
 bool CMyApp::InitMisc()
 {
 	simulation_elapsed_time = 0;
@@ -587,19 +582,20 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 			{
 				case BARNES_HUT: {
 					cl::NDRange global((std::ceil((float)(sim.GetConfig().GetNumberOfBodies()) / (float)(workgroup_size))) * workgroup_size );
-
 					command_queue.enqueueNDRangeKernel(kernel_hybrid_reduce_root,cl::NullRange,workgroup_size*workgroup_size,workgroup_size);
 					command_queue.enqueueNDRangeKernel(kernel_parallel_reduce_root,cl::NullRange,workgroup_size,workgroup_size);
+
 					command_queue.enqueueNDRangeKernel(kernel_init,cl::NullRange,global,workgroup_size);
 					command_queue.enqueueNDRangeKernel(kernel_build_tree,cl::NullRange,global,workgroup_size);
-					command_queue.enqueueNDRangeKernel(kernel_saturate_tree,cl::NullRange,16*max_compute_units,16); // Only works with these values!
-					command_queue.enqueueNDRangeKernel(kernel_calculate_force,cl::NullRange,global,workgroup_size);
 
+					command_queue.enqueueNDRangeKernel(kernel_saturate_tree,cl::NullRange,global,workgroup_size); // Only works with these values!
+					command_queue.enqueueNDRangeKernel(kernel_calculate_force,cl::NullRange,global,workgroup_size);
 					if (sim.GetConfig().GetCollision())
 					{
-						command_queue.enqueueNDRangeKernel(kernel_collison,cl::NullRange,global,workgroup_size);
+						command_queue.enqueueNDRangeKernel(kernel_collision,cl::NullRange,global,workgroup_size);
 					}
-					command_queue.enqueueNDRangeKernel(kernel_copy,cl::NullRange,global,workgroup_size);command_queue.enqueueBarrierWithWaitList();
+					command_queue.enqueueNDRangeKernel(kernel_copy,cl::NullRange,global,workgroup_size);
+					command_queue.enqueueBarrierWithWaitList();
 
 				} break;
 				case BRUTE_FORCE_GLOBAL: {
@@ -610,7 +606,7 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 					if (sim.GetConfig().GetCollision())
 					{
 						cl::NDRange globalColl( (std::ceil((float)(sim.GetConfig().GetNumberOfBodies()) / (float)(workgroup_size))) * workgroup_size );
-						command_queue.enqueueNDRangeKernel(kernel_collison,cl::NullRange,globalColl,workgroup_size);
+						command_queue.enqueueNDRangeKernel(kernel_collision,cl::NullRange,globalColl,workgroup_size);
 					}
 
 
@@ -625,7 +621,7 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 
 					if (sim.GetConfig().GetCollision())
 					{
-						command_queue.enqueueNDRangeKernel(kernel_collison,cl::NullRange,global,workgroup_size);
+						command_queue.enqueueNDRangeKernel(kernel_collision,cl::NullRange,global,workgroup_size);
 					}
 
 					command_queue.enqueueNDRangeKernel(kernel_copy,cl::NullRange,global,workgroup_size);
@@ -638,9 +634,11 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 
 			}
 
+			static int interval = 0;
 			// Wait for all computations to finish
-			if (log_updates && update_id % 20 == 0)
+			if (log_updates && update_id % (2 << interval) == 0)
 			{
+				interval++;
 				LogState();
 			}
 
@@ -683,9 +681,10 @@ void CMyApp::LogState()
 	}
 
 	LogChildrenBuffer();
-	LogPositionBuffer();
-	LogDepthBuffer();
-	LogErrors("kernel_build_tree");
+	// LogPositionBuffer();
+	// LogMassBuffer();
+	// LogDepthBuffer();
+	// LogErrors("kernel_build_tree");
 
 	log_file.close();
 }
@@ -702,6 +701,7 @@ void CMyApp::LogChildrenBuffer()
 
 	for (int i = 0; i < child_vec.size(); i++)
 	{
+		if (child_vec[i] != -1.0f)
 		log_file << (child_vec[i] < sim.GetConfig().GetNumberOfBodies() ? (child_vec[i] == -1 ? "\tUnassigned : " : "\tBody : ") :  "\tNode : ")  << i  << " : " << child_vec[i] << "\n";
 	}
 }
@@ -719,8 +719,26 @@ void CMyApp::LogPositionBuffer()
 
 	for (int i = 0; i < position_vec.size(); i += 3)
 	{
-		log_file << (i < sim.GetConfig().GetNumberOfBodies() ? "\tBody : " :"\tNode : ") << i << " : " << position_vec[i] << "," << position_vec[i + 1] << "," << position_vec[i+2]  << "\n";
+
+		log_file << (i < sim.GetConfig().GetNumberOfBodies() ? "\tBody : " :"\tNode : ") << i / 3 << " : " << position_vec[i] << "," << position_vec[i + 1] << "," << position_vec[i + 2]  << "\n";
 	}
+
+}
+
+void CMyApp::LogMassBuffer()
+{
+	log_file << "Mass Buffer:\n";
+	std::vector<float> mass_vec((num_of_nodes + sim.GetConfig().GetNumberOfBodies() + 1) * 1, -69.0f);
+	command_queue.enqueueReadBuffer(cl_m, CL_TRUE,0, sizeof(float) * mass_vec.size(), &mass_vec[0]);
+	for (int i = 0; i < mass_vec.size(); ++i)
+	{
+		log_file << (i < sim.GetConfig().GetNumberOfBodies() ? "\tBody : " :"\tNode : ") << i << " : " << mass_vec[i]  << "\n";
+	}
+
+}
+
+void CMyApp::LogVelocityBuffer()
+{
 
 }
 
@@ -1000,6 +1018,8 @@ void CMyApp::ResetSimulation()
 {
 	sim_ui.SetUIConfig(next_ui_config);
 	sim.SetConfig(next_config);
+
+
 
 	if(vbo){
 		glBindBuffer(GL_ARRAY_BUFFER, vbo);
