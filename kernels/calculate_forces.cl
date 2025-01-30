@@ -61,7 +61,7 @@ __kernel void calculate_force_local(
     dq[i - 1] += eps;
 
     if ( *max_depth > MAX_DEPTH){
-        DEBUG_PRINT(("ERROR: Max depth error!\n\tExpected: max_depth > %d\n\tActual: %d ",MAX_DEPTH,*max_depth));
+//        DEBUG_PRINT(("ERROR: Max depth error!\n\tExpected: max_depth > %d\n\tActual: %d ",MAX_DEPTH,*max_depth));
         errors[0] = 1;
         return;
     }
@@ -78,12 +78,11 @@ __kernel void calculate_force_local(
             dq[diff + j] = dq[diff];
         }
 
-//        int counter = get_local_id(0) % WARP_SIZE;
 
         barrier(CLK_LOCAL_MEM_FENCE);
 
         for (int body_idx = g_id; body_idx < num_of_bodies; body_idx += get_local_size(0) * get_num_groups(0)){
-            DEBUG_PRINT(("[%d] Body Index: %d",g_id,body_idx));
+//            DEBUG_PRINT(("[%d] Body Index: %d",g_id,body_idx));
 
             float3 position = (float3){
                 positions[body_idx * 3 + 0],
@@ -121,14 +120,14 @@ __kernel void calculate_force_local(
 
                         if ((child < num_of_bodies) || work_group_all(d_squared >= dq[depth])){ // If body or greater distance than previously set threshold
                             float r_distance = rsqrt(d_squared);
-                            DEBUG_PRINT(("\t\t[%d] R Distance: %f\n\t\t\tDifferenc vector: (%f,%f,%f)",g_id,r_distance,diff_vec.x,diff_vec.y,diff_vec.z));
+//                            DEBUG_PRINT(("\t\t[%d] R Distance: %f\n\t\t\tDifferenc vector: (%f,%f,%f)",g_id,r_distance,diff_vec.x,diff_vec.y,diff_vec.z));
 
                             float F = mass[child] * r_distance * r_distance * r_distance;
                             acc.x += diff_vec.x * F;
                             acc.y += diff_vec.y * F;
                             acc.z += diff_vec.z * F;
 
-                            DEBUG_PRINT(("\t\t[%d] Force: %f\n",g_id,F));
+//                            DEBUG_PRINT(("\t\t[%d] Force: %f\n",g_id,F));
                         } else {
                             // Node gets pushed to stack;
                             ++depth;
@@ -147,18 +146,6 @@ __kernel void calculate_force_local(
 
             acc *= G;
             // TODO: Change this when "sort" gets implemented
-
-//
-//            vels[body_idx * 3 + 0] = vels[body_idx * 3 + 0] + acc.x * dt;
-//            vels[body_idx * 3 + 1] = vels[body_idx * 3 + 1] + acc.y * dt;
-//            vels[body_idx * 3 + 2] = vels[body_idx * 3 + 2] + acc.z * dt;
-//
-//            positions[body_idx * 3 + 0] = positions[body_idx * 3 + 0] + vels[body_idx * 3 + 0] * dt;
-//            positions[body_idx * 3 + 1] = positions[body_idx * 3 + 1] + vels[body_idx * 3 + 1] * dt;
-//            positions[body_idx * 3 + 2] = positions[body_idx * 3 + 2] + vels[body_idx * 3 + 2] * dt;
-//            accs[body_idx * 3 + 0] = acc.x;
-//            accs[body_idx * 3 + 1] = acc.y;
-//            accs[body_idx * 3 + 2] = acc.z;
 
             switch(method){
 

@@ -33,7 +33,7 @@ enum AlgorithmConfig
 {
     BARNES_HUT,
     BRUTE_FORCE_GLOBAL, // Naive
-    BRUTE_FORCE_LOCAL, // Optimized with local cache TODO
+    BRUTE_FORCE_LOCAL, // Optimized with local cache
 
 };
 

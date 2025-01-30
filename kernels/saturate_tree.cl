@@ -17,7 +17,7 @@ __kernel void saturate_tree(
     if(get_global_id(0) == 0)
         DEBUG_PRINT(("----STATURATE TREE----"));
 #endif
-    __local volatile int localChild[16 * NUMBER_OF_CELLS];
+    __local volatile int localChild[ WORKGROUP_SIZE * NUMBER_OF_CELLS];
     int step_size = get_local_size(0) * get_num_groups(0);
     int l_id = get_local_id(0);
     int g_id = get_global_id(0);
@@ -36,7 +36,7 @@ __kernel void saturate_tree(
     }
 //    DEBUG_PRINT(("[%d:%d] %d to %d and %d",g_id,l_id,node_idx,num_of_bodies,num_of_nodes));
 
-    while (node_idx <= num_of_bodies + num_of_nodes)
+    while (node_idx <= (num_of_bodies + num_of_nodes))
     {
         if (missing == 0){
 //            DEBUG_PRINT(("\t\t[%d] Init Node: %d\n",g_id,node_idx));
@@ -62,7 +62,7 @@ __kernel void saturate_tree(
                         children[NUMBER_OF_CELLS * node_idx + used_child_idx] = child;
                     }
 
-                    localChild[16 * missing + get_local_id(0)] = child;
+                    localChild[ WORKGROUP_SIZE * missing + get_local_id(0)] = child;
 
                     mass_idx = atomic_load_explicit(&mass[child],memory_order_seq_cst,memory_scope_device);
 
@@ -96,7 +96,7 @@ __kernel void saturate_tree(
         if (missing != 0){
 //            DEBUG_PRINT(("\t\t[%d:%d] Missing %d - Not zero!",g_id,l_id,missing));
             do {
-                int child = localChild[(missing - 1) * 16 + l_id];
+                int child = localChild[(missing - 1) * WORKGROUP_SIZE + l_id];
 
                 mass_idx = atomic_load_explicit(&mass[child],memory_order_seq_cst,memory_scope_device);
 
@@ -124,6 +124,8 @@ __kernel void saturate_tree(
 
 
             atomic_store_explicit(&body_count[node_idx],node_body_count,memory_order_seq_cst,memory_scope_device);
+
+
             mass_idx = 1.0f / node_mass;
 
             positions[node_idx * 3 + 0] = node_center.x * mass_idx;

@@ -21,10 +21,7 @@ __kernel void update_collision_local(
 //	__global float *r,
 		)
 {
-#ifdef DEBUG
-    if (0 == get_global_id(0))
-        DEBUG_PRINT(("---BRUTE FORCE UPDATE - LOCAL---\n\tdt: %f\ntNumber of bodies: %d\n\tGlobal size: %d",dt,num_of_bodies,get_global_size(0)));
-#endif
+
 
 	int g_id = get_global_id(0);
 	int l_id = get_local_id(0);
@@ -59,13 +56,13 @@ __kernel void update_collision_local(
         shPos[l_id * 7 + 3] = v[idx * 3 + 0];
         shPos[l_id * 7 + 4] = v[idx * 3 + 1];
         shPos[l_id * 7 + 5] = v[idx * 3 + 2];
-        shPos[l_id * 7 + 6] = 0.010f;
+        shPos[l_id * 7 + 6] = 0.015f;
 
         barrier(CLK_LOCAL_MEM_FENCE);
         for(int j = 0; j < WORKGROUP_SIZE; ++j){
             if(g_id == tile * WORKGROUP_SIZE + j)
                 continue;
-            vel_gid = calc_collision_traj(p_gid,(float3){shPos[j * 7 + 0],shPos[j * 7 + 1],shPos[j * 7 + 2]},0.010f,shPos[j * 7 + 6],vel_gid,(float3){shPos[j * 7 + 3],shPos[j * 7 + 4],shPos[j * 7 + 5]});
+            vel_gid = calc_collision_traj(p_gid,(float3){shPos[j * 7 + 0],shPos[j * 7 + 1],shPos[j * 7 + 2]},0.015f,shPos[j * 7 + 6],vel_gid,(float3){shPos[j * 7 + 3],shPos[j * 7 + 4],shPos[j * 7 + 5]});
 
         }
         barrier(CLK_LOCAL_MEM_FENCE);

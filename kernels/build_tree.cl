@@ -3,7 +3,6 @@
 
 
 
-__attribute__ ((reqd_work_group_size(WORKGROUP_SIZE, 1, 1)))
 __kernel void build_tree(
     __global float *positions,   // Node and body positions
     __global volatile float *mass,
@@ -23,7 +22,7 @@ __kernel void build_tree(
 
 #ifdef DEBUG
     if (g_id == 0){
-        DEBUG_PRINT(("----BUILD TREE KERNEL----\nMax Depth: %d\nMax children: %d\nNumber of bodies: %d\nNumber of Nodes: %d\n",*max_depth,max_children,num_of_bodies,num_of_nodes));
+        DEBUG_PRINT(("----BUILD TREE KERNEL----\nMax Depth: %d\nMax children: %d\nNumber of bodies: %d\nNumber of Nodes: %d\nBottom: %d\n",*max_depth,max_children,num_of_bodies,num_of_nodes,*bottom));
     }
 #endif
     //Cache local variables
@@ -104,10 +103,11 @@ __kernel void build_tree(
 //                    DEBUG_PRINT(("\t[%d] Position: (%f,%f,%f) (%f,%f,%f)",g_id,position.x,position.y,position.z,og_position.x,og_position.y,og_position.z));
 
                     do {
-                        ++body_depth[p_idx];
                         const int cell = atom_dec(bottom) - 1;
+
+                        ++body_depth[p_idx];
                         if (cell <= num_of_bodies){
-//                            DEBUG_PRINT(("\t\t[%d] ERROR: Cell capacity overflow: %d",g_id,cell));
+                            DEBUG_PRINT(("\t\t[%d] ERROR: Cell capacity overflow: %d\nDepth: %d",g_id,cell,body_depth[p_idx]));
                             error[p_idx] = 1;
                             *bottom = num_of_nodes + num_of_bodies;
                             return;
@@ -137,7 +137,6 @@ __kernel void build_tree(
                         adjustBoundaryValues(position,&boundaryMin,&boundaryMax);
 
                         child_idx = children[NUMBER_OF_CELLS * node_idx + child_path];
-
 
                     } while (child_idx >= 0);
 
