@@ -193,11 +193,9 @@ __kernel void calculate_force_local(
     }
 }
 
-__kernel void calculate_force_separate_tree(
+__kernel void calculate_force_ext(
     __global float* positions,
-    __global float* tree_positions,
     __global float* mass,
-    __global float* tree_mass,
     __global float* vels,
     __global float* accs,
     __global int* children,
@@ -210,7 +208,8 @@ __kernel void calculate_force_separate_tree(
     __global int *max_depth,
     __global int *errors,
     __global float* boundaries, // Min & Max
-    const NumericalMethod method
+    const NumericalMethod method,
+    __global int *sorted
 )
 {
     int g_id = get_global_id(0);
@@ -235,7 +234,7 @@ __kernel void calculate_force_separate_tree(
     }
 #endif
 
-//     Select the greatest radius in one direction
+    // Select the greatest radius in one direction
     float radius = 0.5f * fmax(fmax(boundaries[3] - boundaries[0], boundaries[4] - boundaries[1]),boundaries[5] - boundaries[2]) ;
 
     if (theta > 0){
@@ -255,7 +254,7 @@ __kernel void calculate_force_separate_tree(
     dq[i - 1] += eps;
 
     if ( *max_depth > MAX_DEPTH){
-        DEBUG_PRINT(("ERROR: Max depth error!\n\tExpected: max_depth > %d\n\tActual: %d ",MAX_DEPTH,*max_depth));
+//        DEBUG_PRINT(("ERROR: Max depth error!\n\tExpected: max_depth > %d\n\tActual: %d ",MAX_DEPTH,*max_depth));
         errors[0] = 1;
         return;
     }
@@ -272,17 +271,18 @@ __kernel void calculate_force_separate_tree(
             dq[diff + j] = dq[diff];
         }
 
-//        int counter = get_local_id(0) % WARP_SIZE;
 
         barrier(CLK_LOCAL_MEM_FENCE);
 
         for (int body_idx = g_id; body_idx < num_of_bodies; body_idx += get_local_size(0) * get_num_groups(0)){
-            DEBUG_PRINT(("[%d] Body Index: %d",g_id,body_idx));
+//            DEBUG_PRINT(("[%d] Body Index: %d",g_id,body_idx));
+            int sorted_idx = sorted[body_idx];
+
 
             float3 position = (float3){
-                positions[body_idx * 3 + 0],
-                positions[body_idx * 3 + 1],
-                positions[body_idx * 3 + 2],
+                positions[sorted_idx * 3 + 0],
+                positions[sorted_idx * 3 + 1],
+                positions[sorted_idx * 3 + 2],
                 };
 
             float3 acc = (float3) {0.0f,0.0f,0.0f};
@@ -309,7 +309,7 @@ __kernel void calculate_force_separate_tree(
                     mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
 
                     if (child >= 0){
-                        float3 diff_vec = (float3){tree_positions[child * 3 + 0],tree_positions[child * 3 + 1],tree_positions[child * 3 + 2]} - position;
+                        float3 diff_vec = (float3){positions[child * 3 + 0],positions[child * 3 + 1],positions[child * 3 + 2]} - position;
 
                         float d_squared = eps * eps + diff_vec.x * diff_vec.x + diff_vec.y * diff_vec.y + diff_vec.z * diff_vec.z;
 
@@ -317,12 +317,29 @@ __kernel void calculate_force_separate_tree(
                             float r_distance = rsqrt(d_squared);
 //                            DEBUG_PRINT(("\t\t[%d] R Distance: %f\n\t\t\tDifferenc vector: (%f,%f,%f)",g_id,r_distance,diff_vec.x,diff_vec.y,diff_vec.z));
 
-                            float F = tree_mass[child] * r_distance * r_distance * r_distance;
+                            float F = mass[child] * r_distance * r_distance * r_distance;
                             acc.x += diff_vec.x * F;
                             acc.y += diff_vec.y * F;
                             acc.z += diff_vec.z * F;
 
-                            DEBUG_PRINT(("\t\t[%d] Force: %f\n",g_id,F));
+                            int max_loop = child < num_of_bodies ? LEAF_CAP : 0;
+
+                            for (int i = 0; i < max_loop && children[child * NUMBER_OF_CELLS + i] >= 0; ++i){
+
+                                int c_idx = children[child * NUMBER_OF_CELLS + i];
+
+                                diff_vec = (float3){positions[c_idx * 3 + 0], positions[c_idx * 3 + 1], positions[c_idx * 3 + 2]};
+
+                                d_squared = eps * eps + diff_vec.x * diff_vec.x + diff_vec.y * diff_vec.y + diff_vec.z * diff_vec.z;
+                                r_distance = rsqrt(d_squared);
+
+                                F = mass[c_idx] * r_distance * r_distance * r_distance;
+                                acc.x += diff_vec.x * F;
+                                acc.y += diff_vec.y * F;
+                                acc.z += diff_vec.z * F;
+                            }
+
+//                            DEBUG_PRINT(("\t\t[%d] Force: %f\n",g_id,F));
                         } else {
                             // Node gets pushed to stack;
                             ++depth;
@@ -342,39 +359,39 @@ __kernel void calculate_force_separate_tree(
             acc *= G;
             // TODO: Change this when "sort" gets implemented
 
-//            switch(method){
-//
-//                case Leapfrog:
-//                {
-//                    float v_i_half_X, v_i_half_Y, v_i_half_Z;
-//                    v_i_half_X = vels[g_id * 3 + 0] + accs[g_id * 3 + 0] * dt * 0.5f;
-//                    v_i_half_Y = vels[g_id * 3 + 1] + accs[g_id * 3 + 1] * dt * 0.5f;
-//                    v_i_half_Z = vels[g_id * 3 + 2] + accs[g_id * 3 + 2] * dt * 0.5f;
-//
-//                    positions[g_id * 3 + 0] = positions[g_id * 3 + 0] + v_i_half_X * dt;
-//                    positions[g_id * 3 + 1] = positions[g_id * 3 + 1] + v_i_half_Y * dt;
-//                    positions[g_id * 3 + 2] = positions[g_id * 3 + 2] + v_i_half_Z * dt;
-//
-//                    vels[g_id * 3 + 0] = v_i_half_X + acc.x * dt * 0.5f;
-//                    vels[g_id * 3 + 1] = v_i_half_Y + acc.y * dt * 0.5f;
-//                    vels[g_id * 3 + 2] = v_i_half_Z + acc.z * dt * 0.5f;
-//
-//                } break;
-//                case Euler:
-//                {
-//                    accs[g_id * 3 + 0] = acc.x;
-//                    accs[g_id * 3 + 1] = acc.y;
-//                    accs[g_id * 3 + 2] = acc.z;
-//
-//                    vels[g_id * 3 + 0] = vels[g_id * 3 + 0] + acc.x * dt;
-//                    vels[g_id * 3 + 1] = vels[g_id * 3 + 1] + acc.y * dt;
-//                    vels[g_id * 3 + 2] = vels[g_id * 3 + 2] + acc.z * dt;
-//
-//                    positions[g_id * 3 + 0] = positions[g_id * 3 + 0] + vels[g_id * 3 + 0] * dt;
-//                    positions[g_id * 3 + 1] = positions[g_id * 3 + 1] + vels[g_id * 3 + 1] * dt;
-//                    positions[g_id * 3 + 2] = positions[g_id * 3 + 2] + vels[g_id * 3 + 2] * dt;
-//                } break;
-//            }
+            switch(method){
+
+                case Leapfrog:
+                {
+                    float v_i_half_X, v_i_half_Y, v_i_half_Z;
+                    v_i_half_X = vels[sorted_idx * 3 + 0] + accs[sorted_idx * 3 + 0] * dt * 0.5f;
+                    v_i_half_Y = vels[sorted_idx * 3 + 1] + accs[sorted_idx * 3 + 1] * dt * 0.5f;
+                    v_i_half_Z = vels[sorted_idx * 3 + 2] + accs[sorted_idx * 3 + 2] * dt * 0.5f;
+
+                    positions[sorted_idx * 3 + 0] = positions[sorted_idx * 3 + 0] + v_i_half_X * dt;
+                    positions[sorted_idx * 3 + 1] = positions[sorted_idx * 3 + 1] + v_i_half_Y * dt;
+                    positions[sorted_idx * 3 + 2] = positions[sorted_idx * 3 + 2] + v_i_half_Z * dt;
+
+                    vels[sorted_idx * 3 + 0] = v_i_half_X + acc.x * dt * 0.5f;
+                    vels[sorted_idx * 3 + 1] = v_i_half_Y + acc.y * dt * 0.5f;
+                    vels[sorted_idx * 3 + 2] = v_i_half_Z + acc.z * dt * 0.5f;
+
+                } break;
+                case Euler:
+                {
+                    accs[sorted_idx * 3 + 0] = acc.x;
+                    accs[sorted_idx * 3 + 1] = acc.y;
+                    accs[sorted_idx * 3 + 2] = acc.z;
+
+                    vels[sorted_idx * 3 + 0] = vels[sorted_idx * 3 + 0] + acc.x * dt;
+                    vels[sorted_idx * 3 + 1] = vels[sorted_idx * 3 + 1] + acc.y * dt;
+                    vels[sorted_idx * 3 + 2] = vels[sorted_idx * 3 + 2] + acc.z * dt;
+
+                    positions[sorted_idx * 3 + 0] = positions[sorted_idx * 3 + 0] + vels[sorted_idx * 3 + 0] * dt;
+                    positions[sorted_idx * 3 + 1] = positions[sorted_idx * 3 + 1] + vels[sorted_idx * 3 + 1] * dt;
+                    positions[sorted_idx * 3 + 2] = positions[sorted_idx * 3 + 2] + vels[sorted_idx * 3 + 2] * dt;
+                } break;
+            }
         }
     }
 }

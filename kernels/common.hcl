@@ -9,6 +9,7 @@
 #define LOCKED -2
 #define DEFAULT -1
 
+#define LEAF_CAP 8
 #define NUMBER_OF_CELLS 8
 #define WARP_SIZE 16 // Not sure about this
 

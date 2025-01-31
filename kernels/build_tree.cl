@@ -170,14 +170,10 @@ __kernel void build_tree(
 
 }
 
-#define DEPTH_LIMIT 8
 
-
-__kernel void build_tree_with_depth_limit(
+__kernel void build_tree_ext(
     __global float *positions,   // Node and body positions
-    __global float *tree_positions,
     __global volatile float *mass,
-    __global volatile float *tree_mass,
     __global float *boundaries,  // Root boundary max and min
     __global volatile int *children,      // Array holding indexes to bodies and nodes
     __global volatile int *max_depth,
@@ -186,7 +182,8 @@ __kernel void build_tree_with_depth_limit(
     const int num_of_nodes,
     __global volatile int* bottom,
     __global volatile int* error,
-    __global int* body_depth
+    __global int* body_depth,
+    __global int* start
     )
 {
     int l_id = get_local_id(0);
@@ -194,7 +191,7 @@ __kernel void build_tree_with_depth_limit(
 
 #ifdef DEBUG
     if (g_id == 0){
-        DEBUG_PRINT(("----BUILD TREE KERNEL----\nMax Depth: %d\nMax children: %d\nNumber of bodies: %d\nNumber of Nodes: %d\n",*max_depth,max_children,num_of_bodies,num_of_nodes));
+        DEBUG_PRINT(("----BUILD TREE KERNEL----\nMax Depth: %d\nMax children: %d\nNumber of bodies: %d\nNumber of Nodes: %d\nBottom: %d\n",*max_depth,max_children,num_of_bodies,num_of_nodes,*bottom));
     }
 #endif
     //Cache local variables
@@ -213,8 +210,6 @@ __kernel void build_tree_with_depth_limit(
 
     while (p_idx < num_of_bodies)
     {
-
-
         if (new_body)
         {
             position = (float3){
@@ -252,37 +247,34 @@ __kernel void build_tree_with_depth_limit(
             int locked = node_idx * NUMBER_OF_CELLS + child_path;
             if (atomic_cmpxchg(&children[locked],child_idx,LOCKED) == child_idx)
             {
-                if (child_idx == DEFAULT){
+                if (child_idx == DEFAULT) // Points to empty node
+                {
                     // Empty node -> Insert body directly
 //                    DEBUG_PRINT(("\t[%d] Empty node: %d parent - %d child\n",g_id,node_idx,child_path + node_idx * NUMBER_OF_CELLS));
-                    tree_positions[p_idx * 3 + 0] = positions[p_idx * 3 + 0];
-                    tree_positions[p_idx * 3 + 1] = positions[p_idx * 3 + 1];
-                    tree_positions[p_idx * 3 + 2] = positions[p_idx * 3 + 2];
-                    tree_mass[p_idx] = mass[p_idx];
-                    children[locked] = p_idx;
+                    children[locked] = p_idx; // Set last written element to here
                 }
-                else
+                else if (child_idx < num_of_bodies && children[child_idx * NUMBER_OF_CELLS + 7] == DEFAULT) // Points to body, but capacity is not yet reached
+                {
+                    int i = 0;
+                    for (; i < LEAF_CAP && children[child_idx * NUMBER_OF_CELLS + i] >= 0; ++i);
+
+                    children[child_idx * NUMBER_OF_CELLS + i] = p_idx;
+                    children[locked] = child_idx; // Put original body back
+                }
+                else // Points to body AND capacity has been reached
                 {
                     // Occupied node -> Create subtree with original and current body
 //                    DEBUG_PRINT(("\t[%d] Non-empty node:\n\tPointing to: %d\n\tParent: %d\n",g_id,child_idx,node_idx));
                     int patch = -1;
-                    float3 og_position = (float3){
-                        tree_positions[child_idx * 3 + 0],
-                        tree_positions[child_idx * 3 + 1],
-                        tree_positions[child_idx * 3 + 2],
-                        };
-                    float3 og_boundary_min,og_boundary_max;
-                    og_boundary_min = boundaryMin;
-                    og_boundary_max = boundaryMax;
-
 //                    DEBUG_PRINT(("\t[%d] Distance: %f",g_id,distance(position,og_position)));
 //                    DEBUG_PRINT(("\t[%d] Position: (%f,%f,%f) (%f,%f,%f)",g_id,position.x,position.y,position.z,og_position.x,og_position.y,og_position.z));
-
+                    int last_occupied_idx = -1;
                     do {
-                        ++body_depth[p_idx];
                         const int cell = atom_dec(bottom) - 1;
+
+                        ++body_depth[p_idx];
                         if (cell <= num_of_bodies){
-//                            DEBUG_PRINT(("\t\t[%d] ERROR: Cell capacity overflow: %d",g_id,cell));
+                            DEBUG_PRINT(("\t\t[%d] ERROR: Cell capacity overflow: %d\n\t\t\tDepth: %d",g_id,cell,body_depth[p_idx]));
                             error[p_idx] = 1;
                             *bottom = num_of_nodes + num_of_bodies;
                             return;
@@ -292,20 +284,61 @@ __kernel void build_tree_with_depth_limit(
 
 //                        DEBUG_PRINT(("\t\t[%d] Patch & Cell: %d,%d",g_id,patch,cell));
 
-                        tree_positions[cell * 3 + 0] = (boundaryMax.x + boundaryMin.x) / 2.0f;
-                        tree_positions[cell * 3 + 1] = (boundaryMax.y + boundaryMin.y) / 2.0f;
-                        tree_positions[cell * 3 + 2] = (boundaryMax.z + boundaryMin.z) / 2.0f;
-                        tree_mass[cell] = -1.0f;
+
+                        positions[cell * 3 + 0] = (boundaryMax.x + boundaryMin.x) / 2.0f;
+                        positions[cell * 3 + 1] = (boundaryMax.y + boundaryMin.y) / 2.0f;
+                        positions[cell * 3 + 2] = (boundaryMax.z + boundaryMin.z) / 2.0f;
+                        mass[cell] = -1.0f;
+                        start[cell] = -1;
 
                         if (patch != cell) {
                             children[node_idx * NUMBER_OF_CELLS + child_path] = cell; //Insert node
                         }
 
+                        float3 og_position = (float3){
+                            positions[child_idx * 3 + 0],
+                            positions[child_idx * 3 + 1],
+                            positions[child_idx * 3 + 2],
+                            };
+
+                        float3 og_boundary_min,og_boundary_max;
+                        og_boundary_min = boundaryMin;
+                        og_boundary_max = boundaryMax;
+
                         child_path = calculateOctantIdx(og_position,og_boundary_min,og_boundary_max);
                         adjustBoundaryValues(og_position,&og_boundary_min,&og_boundary_max);
 
+                        children[NUMBER_OF_CELLS * cell + child_path] = child_idx;
+
+                        for (int i = 0; i < LEAF_CAP && children[child_idx * NUMBER_OF_CELLS + i] >= 0; ++i){
+                            int c_idx = children[child_idx * NUMBER_OF_CELLS + i];
+                            children[child_idx * NUMBER_OF_CELLS + i] = DEFAULT; // Set back to default
+
+                            float3 og_position = (float3){
+                                positions[c_idx * 3 + 0],
+                                positions[c_idx * 3 + 1],
+                                positions[c_idx * 3 + 2],
+                                };
+                            float3 og_boundary_min,og_boundary_max;
+
+                            og_boundary_min = boundaryMin;
+                            og_boundary_max = boundaryMax;
+                            child_path = calculateOctantIdx(og_position,og_boundary_min,og_boundary_max);
+                            adjustBoundaryValues(og_position,&og_boundary_min,&og_boundary_max);
+
+                            if (children[NUMBER_OF_CELLS * cell + child_path] == DEFAULT){ // First body in this octant from the maximum eight we have to place again
+                                children[NUMBER_OF_CELLS * cell + child_path] = c_idx; //Original body index
+                            } else { //Another body is already in this octant
+                                int i = 0;
+
+                                for (; i < LEAF_CAP && children[children[NUMBER_OF_CELLS * cell + child_path] * NUMBER_OF_CELLS + i] >= 0; ++i);
+
+                                children[children[NUMBER_OF_CELLS * cell + child_path] * NUMBER_OF_CELLS + i] = c_idx;
+
+                            }
+                        }
+
 //                        DEBUG_PRINT(("[%d] Insert original body %d at: %d ",g_id,child_idx,NUMBER_OF_CELLS * node_idx + child_path));
-                        children[NUMBER_OF_CELLS * cell + child_path] = child_idx; //Original body index
 
                         node_idx = cell;
                         child_path = calculateOctantIdx(position,boundaryMin,boundaryMax);
@@ -313,26 +346,24 @@ __kernel void build_tree_with_depth_limit(
 
                         child_idx = children[NUMBER_OF_CELLS * node_idx + child_path];
 
+                        if (child_idx >= 0){
+                            for (int i = 0; i < LEAF_CAP && children[child_idx * NUMBER_OF_CELLS + i] >= 0; ++i){
+                                ++last_occupied_idx;
+                            }
+                        }
 
-                    } while (child_idx >= 0 && body_depth[p_idx] <= DEPTH_LIMIT);
+                    } while (child_idx >= 0 && last_occupied_idx >= (LEAF_CAP - 1) );
 
-
-                    if (body_depth[p_idx] > DEPTH_LIMIT){
-                        tree_positions[p_idx * 3 + 0] += positions[p_idx * 3 + 0];
-                        tree_positions[p_idx * 3 + 1] += positions[p_idx * 3 + 1];
-                        tree_positions[p_idx * 3 + 2] += positions[p_idx * 3 + 2];
-                        tree_positions[p_idx * 3 + 0] /= 2.0f;
-                        tree_positions[p_idx * 3 + 1] /= 2.0f;
-                        tree_positions[p_idx * 3 + 2] /= 2.0f;
-                        tree_mass[p_idx] += mass[p_idx];
-
-
-                    } else {
+                    if (child_idx < 0){
                         children[NUMBER_OF_CELLS * node_idx + child_path] = p_idx;
-//                        DEBUG_PRINT(("[%d : %d] Insert body %d at %d",g_id,l_id,p_idx,NUMBER_OF_CELLS * node_idx + child_path));
-                    }
+                    } else {
+                        children[NUMBER_OF_CELLS * child_idx + (last_occupied_idx + 1)] = p_idx;
+
+//                    DEBUG_PRINT(("[%d : %d] Insert body %d at %d",g_id,l_id,p_idx,NUMBER_OF_CELLS * node_idx + child_path));
                     atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE,memory_order_seq_cst,memory_scope_device);
+
                     children[locked] = patch;
+
 
                 }
 
@@ -350,24 +381,4 @@ __kernel void build_tree_with_depth_limit(
 
     atom_max(max_depth,local_max_depth);
 
-}
-
-#define LEAF_CAP 8
-
-__kernel void build_tree_with_multiple_body_leaves(
-    __global float *positions,   // Node and body positions
-    __global float *tree_positions,
-    __global volatile float *mass,
-    __global volatile float *tree_mass,
-    __global float *boundaries,  // Root boundary max and min
-    __global volatile int *children,      // Array holding indexes to bodies and nodes
-    __global volatile int *max_depth,
-    const unsigned max_children, // Size of children
-    const int num_of_bodies,
-    const int num_of_nodes,
-    __global volatile int* bottom,
-    __global volatile int* error,
-    __global int* body_depth
-    )
-{
 }
