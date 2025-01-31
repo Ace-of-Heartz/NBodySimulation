@@ -72,7 +72,7 @@ void CMyApp::SetKernelConfig()
 {
 
 
-	num_of_nodes = sim.GetConfig().GetNumberOfBodies() * 2;
+	num_of_nodes = sim.GetConfig().GetNumberOfBodies() * 3;
 	if (num_of_nodes < 1024 * max_compute_units)
 		num_of_nodes = 1024 * max_compute_units;
 	while ((num_of_nodes & (warpsize - 1)) != 0)
@@ -196,18 +196,28 @@ bool CMyApp::InitCL()
 		// Make kernel
 		kernel_update = cl::Kernel(program, "update");
 		kernel_update_local = cl::Kernel(program, "update_local");
+
 		kernel_hybrid_reduce_root = cl::Kernel(program, "hybrid_reduce_root");
 		kernel_parallel_reduce_root = cl::Kernel(program, "parallel_reduce_root");
+
 		kernel_build_tree = cl::Kernel(program, "build_tree");
+		kernel_build_tree_ext = cl::Kernel(program,"build_tree_ext");
+
 		kernel_saturate_tree = cl::Kernel(program, "saturate_tree");
+		kernel_saturate_tree_ext = cl::Kernel(program,"saturate_tree_ext");
+
 		kernel_calculate_force = cl::Kernel(program, "calculate_force_local");
+		kernel_calculate_force_ext = cl::Kernel(program, "calculate_force_ext");
+
 		kernel_copy = cl::Kernel(program, "copy_vertices"); //Copy from CLBuffer to GLBuffer
+
 		kernel_init = cl::Kernel(program, "init"); //Copy from CLBuffer to GLBuffer
+
 		kernel_collision = cl::Kernel(program, "update_collision_local");
-		kernel_build_tree_depth_limit = cl::Kernel(program,"build_tree_with_depth_limit");
-		kernel_calculate_force_sep = cl::Kernel(program,"calculate_force_separate_tree");
-		kernel_copy_opt = cl::Kernel(program, "copy_vertices");
+
 		kernel_sort = cl::Kernel(program, "sort");
+		kernel_sort_ext = cl::Kernel(program, "sort_ext");
+
 		InitParticles();
 	}
 	catch (cl::Error& error)
@@ -237,9 +247,6 @@ void CMyApp::InitParticles(){
 	cl_bodycount = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * (num_of_nodes + 1 + sim.GetConfig().GetNumberOfBodies()));
 	cl_start = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * (num_of_nodes + 1 + sim.GetConfig().GetNumberOfBodies()));
 	cl_sorted = cl::Buffer(context, CL_MEM_READ_WRITE, sizeof(int) * (sim.GetConfig().GetNumberOfBodies() + 1));
-
-	cl_positions = cl::Buffer(context, CL_MEM_READ_WRITE,sizeof(float) * 3 * (sim.GetConfig().GetNumberOfBodies() + 1));
-	cl_masses = cl::Buffer(context, CL_MEM_READ_WRITE,sizeof(float) * (sim.GetConfig().GetNumberOfBodies() + 1));
 
     ///////////////////////////
     // Set-up the simulation //
@@ -305,19 +312,18 @@ bool CMyApp::SetKernelArgs()
 	kernel_build_tree.setArg(11,cl_start);
 
 
-	kernel_build_tree_depth_limit.setArg(0, cl_positions);
-	kernel_build_tree_depth_limit.setArg(1, cl_p);
-	kernel_build_tree_depth_limit.setArg(2, cl_masses);
-	kernel_build_tree_depth_limit.setArg(3, cl_m);
-	kernel_build_tree_depth_limit.setArg(4, cl_boundary);
-	kernel_build_tree_depth_limit.setArg(5, cl_children);
-	kernel_build_tree_depth_limit.setArg(6, cl_max_depth);
-	kernel_build_tree_depth_limit.setArg(7,max_children);
-	kernel_build_tree_depth_limit.setArg(8,sim.GetConfig().GetNumberOfBodies());
-	kernel_build_tree_depth_limit.setArg(9,num_of_nodes);
-	kernel_build_tree_depth_limit.setArg(10,cl_bottom);
-	kernel_build_tree_depth_limit.setArg(11,cl_errors);
-	kernel_build_tree_depth_limit.setArg(12,cl_body_depth_buffer);
+	kernel_build_tree_ext.setArg(0, cl_p);
+	kernel_build_tree_ext.setArg(1, cl_m);
+	kernel_build_tree_ext.setArg(2, cl_boundary);
+	kernel_build_tree_ext.setArg(3, cl_children);
+	kernel_build_tree_ext.setArg(4, cl_max_depth);
+	kernel_build_tree_ext.setArg(5,max_children);
+	kernel_build_tree_ext.setArg(6,sim.GetConfig().GetNumberOfBodies());
+	kernel_build_tree_ext.setArg(7,num_of_nodes);
+	kernel_build_tree_ext.setArg(8,cl_bottom);
+	kernel_build_tree_ext.setArg(9,cl_errors);
+	kernel_build_tree_ext.setArg(10,cl_body_depth_buffer);
+	kernel_build_tree_ext.setArg(11,cl_start);
 
 	kernel_saturate_tree.setArg(0, cl_p);
 	kernel_saturate_tree.setArg(1, cl_m);
@@ -326,6 +332,14 @@ bool CMyApp::SetKernelArgs()
 	kernel_saturate_tree.setArg(4, num_of_nodes);
 	kernel_saturate_tree.setArg(5, cl_bottom);
 	kernel_saturate_tree.setArg(6, cl_bodycount);
+
+	kernel_saturate_tree_ext.setArg(0, cl_p);
+	kernel_saturate_tree_ext.setArg(1, cl_m);
+	kernel_saturate_tree_ext.setArg(2, cl_children);
+	kernel_saturate_tree_ext.setArg(3, sim.GetConfig().GetNumberOfBodies());
+	kernel_saturate_tree_ext.setArg(4, num_of_nodes);
+	kernel_saturate_tree_ext.setArg(5, cl_bottom);
+	kernel_saturate_tree_ext.setArg(6, cl_bodycount);
 
 	kernel_calculate_force.setArg(0, cl_p);
 	kernel_calculate_force.setArg(1, cl_m);
@@ -343,30 +357,25 @@ bool CMyApp::SetKernelArgs()
 	kernel_calculate_force.setArg(14, sim.GetConfig().GetNumericalMethod());
 	kernel_calculate_force.setArg(15, cl_sorted);
 
-	kernel_calculate_force_sep.setArg(0, cl_positions);
-	kernel_calculate_force_sep.setArg(1, cl_p);
-	kernel_calculate_force_sep.setArg(2, cl_masses);
-	kernel_calculate_force_sep.setArg(3, cl_m);
-	kernel_calculate_force_sep.setArg(4, cl_v);
-	kernel_calculate_force_sep.setArg(5, cl_a);
-	kernel_calculate_force_sep.setArg(6, cl_children);
-	kernel_calculate_force_sep.setArg(7, sim.GetConfig().GetBarnesHutConfig().GetTheta());
-	kernel_calculate_force_sep.setArg(8, sim.GetConfig().GetBarnesHutConfig().GetEpsilon());
-	kernel_calculate_force_sep.setArg(9, sim.GetConfig().GetNumberOfBodies());
-	kernel_calculate_force_sep.setArg(11, num_of_nodes);
-	kernel_calculate_force_sep.setArg(12, sim.GetConfig().GetGravitationalConstant());
-	kernel_calculate_force_sep.setArg(13, cl_max_depth);
-	kernel_calculate_force_sep.setArg(14, cl_errors);
-	kernel_calculate_force_sep.setArg(15, cl_boundary);
-	kernel_calculate_force_sep.setArg(16, sim.GetConfig().GetNumericalMethod());
+	kernel_calculate_force_ext.setArg(0, cl_p);
+	kernel_calculate_force_ext.setArg(1, cl_m);
+	kernel_calculate_force_ext.setArg(2, cl_v);
+	kernel_calculate_force_ext.setArg(3, cl_a);
+	kernel_calculate_force_ext.setArg(4, cl_children);
+	kernel_calculate_force_ext.setArg(5, sim.GetConfig().GetBarnesHutConfig().GetTheta());
+	kernel_calculate_force_ext.setArg(6, sim.GetConfig().GetBarnesHutConfig().GetEpsilon());
+	kernel_calculate_force_ext.setArg(7, sim.GetConfig().GetNumberOfBodies());
+	kernel_calculate_force_ext.setArg(8, num_of_nodes);
+	kernel_calculate_force_ext.setArg(9, sim.GetConfig().GetGravitationalConstant());
+	kernel_calculate_force_ext.setArg(11, cl_max_depth);
+	kernel_calculate_force_ext.setArg(12, cl_errors);
+	kernel_calculate_force_ext.setArg(13, cl_boundary);
+	kernel_calculate_force_ext.setArg(14, sim.GetConfig().GetNumericalMethod());
+	kernel_calculate_force_ext.setArg(15, cl_sorted);
 
 	kernel_copy.setArg(0, cl_p);
 	kernel_copy.setArg(1, cl_vbo_mem);
 	kernel_copy.setArg(2,sim.GetConfig().GetNumberOfBodies());
-
-	kernel_copy_opt.setArg(0,cl_positions);
-	kernel_copy_opt.setArg(1,cl_vbo_mem);
-	kernel_copy_opt.setArg(2,sim.GetConfig().GetNumberOfBodies());
 
 	kernel_sort.setArg(0,cl_children);
 	kernel_sort.setArg(1,sim.GetConfig().GetNumberOfBodies());
@@ -375,6 +384,15 @@ bool CMyApp::SetKernelArgs()
 	kernel_sort.setArg(4,cl_start);
 	kernel_sort.setArg(5,cl_bottom);
 	kernel_sort.setArg(6,cl_sorted);
+
+	kernel_sort_ext.setArg(0,cl_children);
+	kernel_sort_ext.setArg(1,sim.GetConfig().GetNumberOfBodies());
+	kernel_sort_ext.setArg(2,num_of_nodes);
+	kernel_sort_ext.setArg(3,cl_bodycount);
+	kernel_sort_ext.setArg(4,cl_start);
+	kernel_sort_ext.setArg(5,cl_bottom);
+	kernel_sort_ext.setArg(6,cl_sorted);
+
 	return true;
 }
 
@@ -618,7 +636,7 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 	kernel_update.setArg(4, delta_time);
 	kernel_update_local.setArg(4, delta_time);
 	kernel_calculate_force.setArg(10, delta_time);
-	kernel_calculate_force_sep.setArg(10, delta_time);
+	kernel_calculate_force_ext.setArg(10, delta_time);
 
 	std::vector<int> child_vec(max_children,-1);
 
@@ -641,10 +659,19 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 					command_queue.enqueueNDRangeKernel(kernel_parallel_reduce_root,cl::NullRange,workgroup_size,workgroup_size);
 
 					command_queue.enqueueNDRangeKernel(kernel_init,cl::NullRange,global,workgroup_size);
-					command_queue.enqueueNDRangeKernel(kernel_build_tree,cl::NullRange,global,workgroup_size);
-					command_queue.enqueueNDRangeKernel(kernel_saturate_tree,cl::NullRange,global,workgroup_size); // Only works with these values!
-					command_queue.enqueueNDRangeKernel(kernel_sort,cl::NullRange,global,workgroup_size);
-					command_queue.enqueueNDRangeKernel(kernel_calculate_force,cl::NullRange,global,workgroup_size);
+
+					// command_queue.enqueueNDRangeKernel(kernel_build_tree,cl::NullRange,global,workgroup_size);
+					command_queue.enqueueNDRangeKernel(kernel_build_tree_ext,cl::NullRange,global,workgroup_size);
+
+					// command_queue.enqueueNDRangeKernel(kernel_saturate_tree,cl::NullRange,global,workgroup_size);
+					command_queue.enqueueNDRangeKernel(kernel_saturate_tree_ext,cl::NullRange,global,workgroup_size);
+
+					// command_queue.enqueueNDRangeKernel(kernel_sort,cl::NullRange,global,workgroup_size);
+					command_queue.enqueueNDRangeKernel(kernel_sort_ext,cl::NullRange,global,workgroup_size);
+
+					// command_queue.enqueueNDRangeKernel(kernel_calculate_force,cl::NullRange,global,workgroup_size);
+					command_queue.enqueueNDRangeKernel(kernel_calculate_force_ext,cl::NullRange,global,workgroup_size);
+
 					if (sim.GetConfig().GetCollision())
 					{
 						command_queue.enqueueNDRangeKernel(kernel_collision,cl::NullRange,global,workgroup_size);
@@ -756,7 +783,7 @@ void CMyApp::LogChildrenBuffer()
 
 	for (int i = 0; i < child_vec.size(); i++)
 	{
-		if (child_vec[i] != -1.0f)
+		// if (child_vec[i] != -1.0f)
 		log_file << (child_vec[i] < sim.GetConfig().GetNumberOfBodies() ? (child_vec[i] == -1 ? "\tUnassigned : " : "\tBody : ") :  "\tNode : ")  << i  << " : " << child_vec[i] << "\n";
 	}
 }

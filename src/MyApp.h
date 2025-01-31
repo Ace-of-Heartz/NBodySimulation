@@ -139,15 +139,14 @@ protected:
 	cl::Kernel kernel_init;
 	cl::Kernel kernel_update;
 	cl::Kernel kernel_update_local;
-	cl::Kernel kernel_copy; cl::Kernel kernel_copy_opt;
+	cl::Kernel kernel_copy;
 	cl::Kernel kernel_hybrid_reduce_root;
 	cl::Kernel kernel_parallel_reduce_root;
-	cl::Kernel kernel_build_tree; cl::Kernel kernel_build_tree_depth_limit;
-	cl::Kernel kernel_saturate_tree;
-	cl::Kernel kernel_calculate_force; cl::Kernel kernel_calculate_force_sep;
-	cl::Kernel kernel_bh_update;
+	cl::Kernel kernel_build_tree; cl::Kernel kernel_build_tree_ext;
+	cl::Kernel kernel_saturate_tree; cl::Kernel kernel_saturate_tree_ext;
+	cl::Kernel kernel_calculate_force; cl::Kernel kernel_calculate_force_ext;
 	cl::Kernel kernel_collision;
-	cl::Kernel kernel_sort;
+	cl::Kernel kernel_sort; cl::Kernel kernel_sort_ext;
 
 #pragma endregion Kernels
 
@@ -168,9 +167,6 @@ protected:
 	cl::Buffer cl_max_depth;
 	cl::Buffer cl_start;
 	cl::Buffer cl_sorted;
-
-	cl::Buffer cl_positions;
-	cl::Buffer cl_masses;
 
 #pragma endregion Buffers
 
