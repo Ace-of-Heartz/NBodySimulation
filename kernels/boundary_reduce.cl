@@ -44,6 +44,10 @@ __kernel void hybrid_reduce_root(
             p[g_id * 6 + 4],
             p[g_id * 6 + 5]
             };
+        //TODO
+        float3 temp_min = p_min_next;
+        p_min_next = get_min_v3(p_min_next,p_max_next);
+        p_max_next = get_max_v3(temp_min,p_max_next);
 
         p_min = get_min_v3(p_min,p_min_next);
         p_max = get_max_v3(p_max,p_max_next);

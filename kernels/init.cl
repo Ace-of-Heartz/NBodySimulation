@@ -9,7 +9,8 @@ __kernel void init(
     const int num_of_bodies,
     const int num_of_nodes,
     const unsigned max_children,
-    __global int* body_depth
+    __global int* body_depth,
+    __global int* start
 )
 {
     int g_id = get_global_id(0);
@@ -30,6 +31,8 @@ __kernel void init(
         positions[(num_of_bodies + num_of_nodes) * 3 + 2] = (boundaries[2] + boundaries[5]) / 2.0f;
         mass[num_of_nodes + num_of_bodies] = -1.0f;
         *bottom = num_of_nodes + num_of_bodies;
+        start[num_of_bodies + num_of_nodes] = 0;
+
     }
 
 

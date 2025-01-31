@@ -1,8 +1,9 @@
 #include "saturate_tree.hcl"
 #include "common.hcl"
 
+// Based on the following code:
+// https://github.com/bneukom/gpu-nbody/blob/master/kernels/nbody/summarizetree.cl
 
-// TODO Not sure if this work correctly??
 __kernel void saturate_tree(
     __global float *positions,
     __global volatile atomic_float *mass,
@@ -47,22 +48,21 @@ __kernel void saturate_tree(
 
             int used_child_idx = 0;
 
-//#pragma unroll NUMBER_OF_CELLS
+#pragma unroll NUMBER_OF_CELLS
             for (int c_idx = 0; c_idx < NUMBER_OF_CELLS; ++c_idx){
                 int child = children[node_idx * NUMBER_OF_CELLS + c_idx];
 //                DEBUG_PRINT(("\t\t\t Child Index: %d\n\t\t\tChild: %d\n",c_idx,child));
 
 
 
-                if (child >= 0) {
-                    // "Used" == Child points to existing node or body
+                if (child >= 0) { // Child points to existing node or body
 
-                    if (child != used_child_idx){
+                    if (c_idx != used_child_idx){ // Non null children get moved to the front
                         children[NUMBER_OF_CELLS * node_idx + c_idx] = -1;
                         children[NUMBER_OF_CELLS * node_idx + used_child_idx] = child;
                     }
 
-                    localChild[ WORKGROUP_SIZE * missing + get_local_id(0)] = child;
+                    localChild[ WORKGROUP_SIZE * missing + l_id] = child; // Cache children,
 
                     mass_idx = atomic_load_explicit(&mass[child],memory_order_seq_cst,memory_scope_device);
 
@@ -70,11 +70,11 @@ __kernel void saturate_tree(
 
                     ++missing;
 
-                    if (mass_idx >= 0.0f) {
+                    if (mass_idx >= 0.0f) { // Mass is available
 //                        DEBUG_PRINT(("\t\t\t\t[%d] Child ready\n",g_id));
 
                         --missing;
-                        if (child >= num_of_bodies){
+                        if (child >= num_of_bodies){ // Child is a node
 //                            DEBUG_PRINT(("\t\t\t\t[%d] Node Body Count BEFORE: %d\n",g_id,node_body_count));
 
                             node_body_count += atomic_load_explicit(&body_count[child],memory_order_seq_cst,memory_scope_device) - 1;
@@ -90,13 +90,14 @@ __kernel void saturate_tree(
                 }
             }
             mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
-            node_body_count += used_child_idx;
+            node_body_count += used_child_idx; // += "Number of existing nodes/bodies"
         }
 
-        if (missing != 0){
+        if (missing != 0){ // Mass wasn't available for at least one child
 //            DEBUG_PRINT(("\t\t[%d:%d] Missing %d - Not zero!",g_id,l_id,missing));
             do {
-                int child = localChild[(missing - 1) * WORKGROUP_SIZE + l_id];
+                int child = localChild[(missing - 1) * WORKGROUP_SIZE + l_id]; // Because of the previous code block, this will yield the missing child
+                // Missing > 0, therefore the child that gets cached here is guaranteed to be missing!
 
                 mass_idx = atomic_load_explicit(&mass[child],memory_order_seq_cst,memory_scope_device);
 
@@ -115,15 +116,18 @@ __kernel void saturate_tree(
                 }
 
             } while((mass_idx >= 0.0f) && (missing != 0));
+            // This will loop if one child becomes available and we are still missing children
+
+            // If child is not available, or we aren't missing any more children, due to thread divergence these threads will slow their progress
 
 //            DEBUG_PRINT(("\t\t [%d:%d] Mass: %f\t Node Mass: %f\n",g_id,l_id,mass_idx,node_mass));
         }
 
-        if (missing == 0){
+        if (missing == 0){ // If no failure happened, continue
 //            DEBUG_PRINT(("[%d]\tMissing is zero\n\tNode Index: %d\n\tNode Mass: %f\n\tNode center of mass: (%f,%f,%f)\n",g_id,node_idx,node_mass,node_center.x,node_center.y,node_center.z));
 
 
-            atomic_store_explicit(&body_count[node_idx],node_body_count,memory_order_seq_cst,memory_scope_device);
+            atomic_store_explicit(&body_count[node_idx],node_body_count,memory_order_seq_cst,memory_scope_device); // Necessary for later sorting only!
 
 
             mass_idx = 1.0f / node_mass;
@@ -138,9 +142,9 @@ __kernel void saturate_tree(
 //            DEBUG_PRINT(("\t\tNext node: %d\n",node_idx));
 
             node_idx += step_size; // Continue with next cell
+            // If a thread fails with a node, it continues trying to get all missing childrne in the next loop
         }
 //        DEBUG_PRINT(("\t\tNext node: %d\n\tMissing: %d",node_idx,missing));
-        // TODO: FIX THIS
 
     }
 }
