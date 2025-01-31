@@ -45,9 +45,6 @@ struct SUpdateInfo
 	float DeltaTimeInSec   = 0.0f; // Előző Update óta eltelt idő
 };
 
-
-
-
 class CMyApp
 {
 public:
@@ -137,17 +134,24 @@ protected:
 	cl::CommandQueue command_queue;
 	cl::Program program;
 
+#pragma region Kernels
+
 	cl::Kernel kernel_init;
 	cl::Kernel kernel_update;
 	cl::Kernel kernel_update_local;
-	cl::Kernel kernel_copy;
+	cl::Kernel kernel_copy; cl::Kernel kernel_copy_opt;
 	cl::Kernel kernel_hybrid_reduce_root;
 	cl::Kernel kernel_parallel_reduce_root;
-	cl::Kernel kernel_build_tree;
+	cl::Kernel kernel_build_tree; cl::Kernel kernel_build_tree_depth_limit;
 	cl::Kernel kernel_saturate_tree;
-	cl::Kernel kernel_calculate_force;
+	cl::Kernel kernel_calculate_force; cl::Kernel kernel_calculate_force_sep;
 	cl::Kernel kernel_bh_update;
-	cl::Kernel kernel_collison;
+	cl::Kernel kernel_collision;
+	cl::Kernel kernel_sort;
+
+#pragma endregion Kernels
+
+#pragma region Buffers
 
 	cl::BufferGL cl_vbo_mem;
 	cl::Buffer cl_v, cl_m ,cl_a;
@@ -157,14 +161,18 @@ protected:
 	cl::Buffer cl_p;
 	cl::Buffer cl_children;
 	cl::Buffer cl_boundary;
-	cl::Buffer cl_bottom_buffer;
-	cl::Buffer cl_error_buffer;
-	cl::Buffer cl_bodycount_buffer;
+	cl::Buffer cl_bottom; // Single variable used for getting the next unused node index
+	cl::Buffer cl_errors;
+	cl::Buffer cl_bodycount;
 	cl::Buffer cl_body_depth_buffer;
-	cl::Buffer cl_max_depth_buffer;
+	cl::Buffer cl_max_depth;
+	cl::Buffer cl_start;
+	cl::Buffer cl_sorted;
 
 	cl::Buffer cl_positions;
 	cl::Buffer cl_masses;
+
+#pragma endregion Buffers
 
 	float delta_time;
 	float simulation_elapsed_time = 0;
