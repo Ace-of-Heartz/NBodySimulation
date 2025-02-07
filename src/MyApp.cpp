@@ -913,7 +913,7 @@ void CMyApp::RenderGUI()
 
 
 			long to_long_milli = simulation_elapsed_time * 60;
-			ImGui::Text("Time of simulation: %d:%d:%d" ,
+			ImGui::Text("Time of simulation: %ld:%ld:%ld" ,
 
 				to_long_milli / 60 / 60,
 				to_long_milli / 60 % 60,
@@ -955,33 +955,48 @@ void CMyApp::RenderGUI()
 
 				ImGui::Checkbox("Enable collision?",&next_config.GetCollision());
 
-				if(ImGui::BeginCombo("Algorithm",next_ui_config.GetAlgoItem()))
-				{
-					for (auto& [name,value] : SimulationUI::algo_config_items)
-					{
-						if (ImGui::Selectable(name,false))
-						{
-							next_config.SetAlgorithmConfig(value);
-							next_ui_config.SetAlgoItem(name);
-						}
-					}
+				// if(ImGui::BeginCombo("Algorithm",next_ui_config.GetAlgoItem()))
+				// {
+				// 	for (auto& [name,value] : SimulationUI::algo_config_items)
+				// 	{
+				// 		if (ImGui::Selectable(name,false))
+				// 		{
+				// 			next_config.SetAlgorithmConfig(value);
+				// 			next_ui_config.SetAlgoItem(name);
+				// 		}
+				// 	}
+				//
+				// 	ImGui::EndCombo();
+				// }
+				ImGuiWidgets::RenderComboBox<AlgorithmConfig>(
+					SimulationUI::algo_config_items,
+					[this]<typename T0>(T0 && PH1){next_config.SetAlgorithmConfig(std::forward<T0>(PH1));},
+					[this]<typename T0>(T0 && PH1){next_ui_config.SetAlgoItem(std::forward<T0>(PH1));},
+					"Algorithm",
+					next_ui_config.GetAlgoItem()
+					);
 
-					ImGui::EndCombo();
-				}
+				// if(ImGui::BeginCombo("Numerical Method",next_ui_config.GetNumericalMethodItem()))
+				// {
+				// 	for (auto& [name,value] : SimulationUI::num_method_config_items)
+				// 	{
+				// 		if (ImGui::Selectable(name,false))
+				// 		{
+				// 			next_config.SetNumericalMethod(value);
+				// 			next_ui_config.SetNumericalMethodItem(name);
+				// 		}
+				// 	}
+				//
+				// 	ImGui::EndCombo();
+				// }
 
-				if(ImGui::BeginCombo("Numerical Method",next_ui_config.GetNumericalMethodItem()))
-				{
-					for (auto& [name,value] : SimulationUI::num_method_config_items)
-					{
-						if (ImGui::Selectable(name,false))
-						{
-							next_config.SetNumericalMethod(value);
-							next_ui_config.SetNumericalMethodItem(name);
-						}
-					}
-
-					ImGui::EndCombo();
-				}
+				ImGuiWidgets::RenderComboBox<NumericalMethod>(
+					SimulationUI::num_method_config_items,
+					[this]<typename T0>(T0 && PH1){next_config.SetNumericalMethod(std::forward<T0>(PH1));},
+					[this]<typename T0>(T0 && PH1){next_ui_config.SetNumericalMethodItem(std::forward<T0>(PH1));},
+					"Numerical Method",
+					next_ui_config.GetNumericalMethodItem()
+				);
 
 
 				ImGui::InputInt("Particle Count:",&next_config.GetNumberOfBodies());
@@ -999,23 +1014,13 @@ void CMyApp::RenderGUI()
 
 					if(ImGui::TreeNode("Position"))
 					{
-
-						if(ImGui::BeginCombo("Position Distribution",next_ui_config.GetPositionConfigItem()))
-						{
-
-							for (auto& [name,value] : SimulationUI::pos_config_items)
-							{
-								if (ImGui::Selectable(name,false))
-								{
-									next_config.SetPositionConfig(value);
-									next_ui_config.SetPositionConfigItem(name);
-								}
-							}
-
-
-							ImGui::EndCombo();
-						}
-
+						ImGuiWidgets::RenderComboBox<PositionConfig>(
+							SimulationUI::pos_config_items,
+							[this]<typename T0>(T0 && PH1) { next_config.SetPositionConfig(std::forward<T0>(PH1)); },
+							[this]<typename T0>(T0 && PH1) { next_ui_config.SetPositionConfigItem(std::forward<T0>(PH1)); },
+							"Position Distribution",
+							next_ui_config.GetPositionConfigItem()
+							);
 
 						ImGui::SliderFloat("Starting Volume Radius:",&next_config.GetStartingVolumeRadius(),0.0f,10.0f);
 						ImGui::TreePop();
@@ -1026,20 +1031,18 @@ void CMyApp::RenderGUI()
 					if (ImGui::TreeNode("Velocity"))
 					{
 						if (ImGui::InputFloat("Starting Velocity:", &next_config.GetStartingSpeedMul()),1,10)
-
-						if(ImGui::BeginCombo("Velocity Distribution",next_ui_config.GetVelocityConfigItem()))
 						{
-							for (auto& [name,value] : SimulationUI::vel_config_items)
-							{
-								if (ImGui::Selectable(name))
-								{
-									next_config.SetVelocityConfig(value);
-									next_ui_config.SetVelocityConfigItem(name);
-								}
-							}
 
-							ImGui::EndCombo();
 						}
+
+						ImGuiWidgets::RenderComboBox<VelocityConfig>(
+							SimulationUI::vel_config_items,
+							[this]<typename T0>(T0 && PH1) {next_config.SetVelocityConfig(std::forward<T0>(PH1));},
+							[this]<typename T0>(T0 && PH1) {next_ui_config.SetVelocityConfigItem(std::forward<T0>(PH1));},
+							"Velocity Distribution",
+							next_ui_config.GetVelocityConfigItem()
+						);
+
 						ImGui::TreePop();
 					}
 
