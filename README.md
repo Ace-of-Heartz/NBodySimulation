@@ -31,8 +31,21 @@ Currently supports 3 types of algorithms:
 For a better understanding over the **N-Body problem** and the **Barnes Hut algorithm**, the following resources were used:
 - [The Barnes-Hut Algorithm](https://arborjs.org/docs/barnes-hut) (HTTP only site)
 
+## Known bugs
+- The Barnes Hut depth limit seems to be unreasonably limiting at the moment, which might indicate that there is other problem behind it.
 
 ## Future Plans
 
 - Seek other ways to increase limit for Barnes Hut tree depth
     - Spatial Hashing
+- Implement proper logging features:
+  - Log starting values (for later review) + Implement config load in using log files
+  - Log kernel inputs and outputs
+- Implement other N-Body problem solver algorithms on CPU and GPU
+- Implement better interface for using different types of N-Body algorithms
+- Work and improve graphics calls
+  - Vulkan API (in the near future sometime)
+  - More, custom shaders:
+    - Particle size depending on weight
+    - Particle colour depending on weight/acceleration/speed
+    - Bounding box draws
