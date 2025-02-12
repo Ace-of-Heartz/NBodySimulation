@@ -12,6 +12,7 @@
 #include <glm/gtc/constants.hpp>
 
 #include "oclutils.hpp"
+#include "ImGuiWidgets.h"
 
 
 
@@ -34,6 +35,7 @@ void CMyApp::LoadTexture(const std::string& filename) {
 
 bool CMyApp::InitGL()
 {
+
 	SetupDebugCallback();
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -151,7 +153,13 @@ bool CMyApp::InitCL()
 			throw cl::Error(CL_INVALID_CONTEXT, "Failed to create CL/GL shared context");
 
 		// Create Command Queue
+		std::cout << "Devices:" << std::endl;
 		cl::vector<cl::Device> devices = context.getInfo<CL_CONTEXT_DEVICES>();
+		for (auto device : devices)
+		{
+			std::cout << "\t" << device.getInfo<CL_DEVICE_NAME>() << std::endl;
+		}
+		// return true;
 		std::cout << devices[0].getInfo<CL_DEVICE_NAME>() << std::endl;
 		command_queue = cl::CommandQueue(context, devices[0]);
 
@@ -426,7 +434,10 @@ bool CMyApp::InitBodyAttributes()
 		}
 	}
 
-	command_queue.enqueueWriteBuffer(cl_m, CL_TRUE, 0, sim.GetConfig().GetNumberOfBodies() * sizeof(float), &mass[0]);
+	{
+		auto res = command_queue.enqueueWriteBuffer(cl_m, CL_TRUE, 0, sim.GetConfig().GetNumberOfBodies() * sizeof(float), &mass[0]);
+		CL_CHECK(res);
+	}
 	// command_queue.enqueueWriteBuffer(cl_masses,CL_TRUE,0,sim.GetConfig().GetNumberOfBodies() * sizeof(float), &mass[0]);
 
 	switch (sim.GetConfig().GetPositionConfig())
@@ -486,7 +497,10 @@ bool CMyApp::InitBodyAttributes()
 	glUnmapBuffer(GL_ARRAY_BUFFER);
 	glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-	command_queue.enqueueWriteBuffer(cl_p, CL_TRUE, 0, sim.GetConfig().GetNumberOfBodies() * sizeof(float) * 3, &positions[0]);
+	{
+		auto res = command_queue.enqueueWriteBuffer(cl_p, CL_TRUE, 0, sim.GetConfig().GetNumberOfBodies() * sizeof(float) * 3, &positions[0]);
+		CL_CHECK(res);
+	}
 	// command_queue.enqueueWriteBuffer(cl_positions,CL_TRUE, 0, sim.GetConfig().GetNumberOfBodies() * sizeof(float) * 3, &positions[0]);
 
 	std::vector<float> vels(sim.GetConfig().GetNumberOfBodies() * 3,0.0);
@@ -560,8 +574,11 @@ bool CMyApp::InitBodyAttributes()
 		}
 		break;
 	}
-	auto res = command_queue.enqueueWriteBuffer(cl_v, CL_TRUE, 0, sim.GetConfig().GetNumberOfBodies() * sizeof(float) * 3, &vels[0]);
-	CL_CHECK(res);
+
+	{
+		auto res = command_queue.enqueueWriteBuffer(cl_v, CL_TRUE, 0, sim.GetConfig().GetNumberOfBodies() * sizeof(float) * 3, &vels[0]);
+		CL_CHECK(res);
+	}
 
 	InitObjectAcceleration();
 
@@ -571,8 +588,11 @@ bool CMyApp::InitBodyAttributes()
 bool CMyApp::InitObjectAcceleration()
 {
 	std::vector<float> acc(sim.GetConfig().GetNumberOfBodies() * 3,0.0);
-	auto res = command_queue.enqueueWriteBuffer(cl_a,CL_TRUE,0,sim.GetConfig().GetNumberOfBodies() * sizeof(float) * 3,&acc[0]);
-	CL_CHECK(res);
+	{
+		auto res = command_queue.enqueueWriteBuffer(cl_a,CL_TRUE,0,sim.GetConfig().GetNumberOfBodies() * sizeof(float) * 3,&acc[0]);
+		CL_CHECK(res);
+
+	}
 
 	return true;
 }
@@ -624,7 +644,6 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 
 	m_cameraManipulator.Update(update_info.DeltaTimeInSec);
 
-
 	delta_time = update_info.DeltaTimeInSec;
 	if (delta_time > 0.005f) delta_time = 0.005f;
 	if (delta_time < 0.0001f) delta_time = 0.0001f;
@@ -639,7 +658,6 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 	kernel_calculate_force_ext.setArg(10, delta_time);
 
 	std::vector<int> child_vec(max_children,-1);
-
 	// CL
 	try {
 		cl::vector<cl::Memory> acquirable;
@@ -955,19 +973,6 @@ void CMyApp::RenderGUI()
 
 				ImGui::Checkbox("Enable collision?",&next_config.GetCollision());
 
-				// if(ImGui::BeginCombo("Algorithm",next_ui_config.GetAlgoItem()))
-				// {
-				// 	for (auto& [name,value] : SimulationUI::algo_config_items)
-				// 	{
-				// 		if (ImGui::Selectable(name,false))
-				// 		{
-				// 			next_config.SetAlgorithmConfig(value);
-				// 			next_ui_config.SetAlgoItem(name);
-				// 		}
-				// 	}
-				//
-				// 	ImGui::EndCombo();
-				// }
 				ImGuiWidgets::RenderComboBox<AlgorithmConfig>(
 					SimulationUI::algo_config_items,
 					[this]<typename T0>(T0 && PH1){next_config.SetAlgorithmConfig(std::forward<T0>(PH1));},
@@ -975,20 +980,6 @@ void CMyApp::RenderGUI()
 					"Algorithm",
 					next_ui_config.GetAlgoItem()
 					);
-
-				// if(ImGui::BeginCombo("Numerical Method",next_ui_config.GetNumericalMethodItem()))
-				// {
-				// 	for (auto& [name,value] : SimulationUI::num_method_config_items)
-				// 	{
-				// 		if (ImGui::Selectable(name,false))
-				// 		{
-				// 			next_config.SetNumericalMethod(value);
-				// 			next_ui_config.SetNumericalMethodItem(name);
-				// 		}
-				// 	}
-				//
-				// 	ImGui::EndCombo();
-				// }
 
 				ImGuiWidgets::RenderComboBox<NumericalMethod>(
 					SimulationUI::num_method_config_items,
@@ -1006,7 +997,6 @@ void CMyApp::RenderGUI()
 					ImGui::EndTooltip();
 				}
 
-				// ImGui::SliderFloat("Gravitational Constant Slider",&next_config.GetGravitationalConstant(),1e-11,0.1f,"%.11f");
 				ImGui::InputFloat("Gravitational Constant",&next_config.GetGravitationalConstant(),1e-6,1e-3,"%.11f");
 
 				if (ImGui::TreeNode("Particle Distributions & Settings"))

@@ -123,17 +123,16 @@ GLuint TextureFromFile(const char* filename)
   
 	int img_mode = 0;
 	
-	if ( loaded_img == 0 )
+	if ( loaded_img == nullptr )
 	{
 		std::cout << "[TextureFromFile] Error at image loading: " << filename << std::endl;
 		return 0;
 	}
-
 	#if SDL_BYTEORDER == SDL_LIL_ENDIAN
 		if ( loaded_img->format->BytesPerPixel == 4 )
-			img_mode = GL_RGBA;
+			img_mode = GL_BGRA;
 		else
-			img_mode = GL_RGB;
+			img_mode = GL_BGR;
 	#else
 		if ( loaded_img->format->BytesPerPixel == 4 )
 			img_mode = GL_RGBA;
@@ -145,8 +144,8 @@ GLuint TextureFromFile(const char* filename)
     glGenTextures(1, &tex);
   
     glBindTexture(GL_TEXTURE_2D, tex);
-	gluBuild2DMipmaps(GL_TEXTURE_2D, GL_RGBA, loaded_img->w, loaded_img->h, img_mode, GL_UNSIGNED_BYTE, loaded_img->pixels);
-  
+	auto res = gluBuild2DMipmaps(GL_TEXTURE_2D, GL_RGBA, loaded_img->w, loaded_img->h, img_mode, GL_UNSIGNED_BYTE, loaded_img->pixels); //TODO: This causes a Segfault in OCLgrind
+
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MAG_FILTER,GL_LINEAR);
   

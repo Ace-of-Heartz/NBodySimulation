@@ -120,9 +120,11 @@ int main( int argc, char* args[] )
 
 	bool quit = false;
 	SDL_Event ev;
-	
 	CMyApp app;
-	if (!app.InitGL() || !app.InitCL() || !app.InitMisc())
+
+
+
+	if (!app.InitGL() || !app.InitCL() || !app.InitMisc() )
 	{
 		SDL_GL_DeleteContext(context);
 		SDL_DestroyWindow(win);
@@ -132,7 +134,6 @@ int main( int argc, char* args[] )
 	
 	gTimer nanoTimer;
 	bool ShowImGui = true;
-
 
 	while (!quit)
 	{
