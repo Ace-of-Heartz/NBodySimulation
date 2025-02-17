@@ -149,7 +149,13 @@ __kernel void build_tree(
 
                     children[NUMBER_OF_CELLS * node_idx + child_path] = p_idx;
 //                    DEBUG_PRINT(("[%d : %d] Insert body %d at %d",g_id,l_id,p_idx,NUMBER_OF_CELLS * node_idx + child_path));
-                    atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE,memory_order_seq_cst,memory_scope_device);
+
+                    #if defined(__opencl_c_atomic_order_seq_cst) && defined(__opencl_c_atomic_scope_device)
+                        atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE,memory_order_seq_cst,memory_scope_device);
+                    #else
+                        mem_fence(CLK_GLOBAL_MEM_FENCE);
+                    #endif
+
                     children[locked] = patch;
 
                 }
@@ -358,9 +364,15 @@ __kernel void build_tree_ext(
                         children[NUMBER_OF_CELLS * node_idx + child_path] = p_idx;
                     } else {
                         children[NUMBER_OF_CELLS * child_idx + (last_occupied_idx + 1)] = p_idx;
+                    }
 
 //                    DEBUG_PRINT(("[%d : %d] Insert body %d at %d",g_id,l_id,p_idx,NUMBER_OF_CELLS * node_idx + child_path));
-                    atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE,memory_order_seq_cst,memory_scope_device);
+
+                    #if defined(__opencl_c_atomic_order_seq_cst) && defined(__opencl_c_atomic_scope_device)
+                        atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE,memory_order_seq_cst,memory_scope_device);
+                    #else
+                        mem_fence(CLK_GLOBAL_MEM_FENCE);
+                    #endif
 
                     children[locked] = patch;
 

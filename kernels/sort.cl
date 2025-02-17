@@ -24,10 +24,18 @@ __kernel void sort(
                 int child = children[c_path + cell * NUMBER_OF_CELLS];
 
                 if (child >= num_of_bodies){ // Node
-                    atomic_store_explicit(&start[child],cell_start,memory_order_release,memory_scope_device);
+                    #if defined(__opencl_c_generic_address_space)
+                        atomic_store_explicit(&start[child],cell_start,memory_order_release,memory_scope_device);
+                    #else
+                        start[child] = cell_start;
+                    #endif
 
                     // Fence to flag that atomic variable has been update
-                    atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE, memory_order_seq_cst,memory_scope_device);
+                    #if defined(__opencl_c_atomic_order_seq_cst) && defined(__opencl_c_atomic_scope_device)
+                        atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE, memory_order_seq_cst,memory_scope_device);
+                    #else
+                        mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE)
+                    #endif
 
                     cell_start += body_count[child];
                 }
@@ -65,10 +73,18 @@ __kernel void sort_ext(
                 int child = children[c_path + cell * NUMBER_OF_CELLS];
 
                 if (child >= num_of_bodies){ // Node
-                    atomic_store_explicit(&start[child],cell_start,memory_order_release,memory_scope_device);
+                    #if defined(__opencl_c_generic_address_space)
+                        atomic_store_explicit(&start[child],cell_start,memory_order_release,memory_scope_device);
+                    #else
+                        start[child] = cell_start;
+                    #endif
 
                     // Fence to flag that atomic variable has been update
-                    atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE, memory_order_seq_cst,memory_scope_device);
+                    #if defined(__opencl_c_atomic_order_seq_cst) && defined(__opencl_c_atomic_scope_device)
+                        atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE, memory_order_seq_cst,memory_scope_device);
+                    #else
+                        mem_fence(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE)
+                    #endif
 
                     cell_start += body_count[child];
                 }

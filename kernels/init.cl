@@ -33,7 +33,10 @@ __kernel void init(
         *bottom = num_of_nodes + num_of_bodies;
         start[num_of_bodies + num_of_nodes] = 0;
 
+
+
     }
+
 
 
 }

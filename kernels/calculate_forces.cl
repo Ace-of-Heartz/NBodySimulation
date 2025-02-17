@@ -109,7 +109,11 @@ __kernel void calculate_force_local(
                 local_pos[depth] = 0;
             }
 
-            mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+            #if defined(__opencl_c_atomic_order_seq_cst) && defined(__opencl_c_atomic_scope_device)
+                atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE,memory_order_seq_cst,memory_scope_device);
+            #else
+                mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+            #endif
 
             while (depth >= j) {
                 int top;
@@ -120,7 +124,11 @@ __kernel void calculate_force_local(
                         local_pos[depth] = top + 1;
                     }
 
-                    mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+                    #if defined(__opencl_c_atomic_order_seq_cst) && defined(__opencl_c_atomic_scope_device)
+                        atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE,memory_order_seq_cst,memory_scope_device);
+                    #else
+                        mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+                    #endif
 
                     if (child >= 0){
                         float3 diff_vec = (float3){positions[child * 3 + 0],positions[child * 3 + 1],positions[child * 3 + 2]} - position;
@@ -144,7 +152,11 @@ __kernel void calculate_force_local(
                                 local_node[depth] = child;
                                 local_pos[depth] = 0;
                             }
-                            mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+                            #if defined(__opencl_c_atomic_order_seq_cst) && defined(__opencl_c_atomic_scope_device)
+                                atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE,memory_order_seq_cst,memory_scope_device);
+                            #else
+                                mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+                            #endif
                         }
                     } else {
                         depth = max(j, depth - 1);
@@ -295,7 +307,11 @@ __kernel void calculate_force_ext(
                 local_pos[depth] = 0;
             }
 
-            mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+            #if defined(__opencl_c_atomic_order_seq_cst) && defined(__opencl_c_atomic_scope_device)
+                atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE,memory_order_seq_cst,memory_scope_device);
+            #else
+                mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+            #endif
 
             while (depth >= j) {
                 int top;
@@ -306,7 +322,11 @@ __kernel void calculate_force_ext(
                         local_pos[depth] = top + 1;
                     }
 
-                    mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+                    #if defined(__opencl_c_atomic_order_seq_cst) && defined(__opencl_c_atomic_scope_device)
+                        atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE,memory_order_seq_cst,memory_scope_device);
+                    #else
+                        mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+                    #endif
 
                     if (child >= 0){
                         float3 diff_vec = (float3){positions[child * 3 + 0],positions[child * 3 + 1],positions[child * 3 + 2]} - position;
@@ -347,7 +367,12 @@ __kernel void calculate_force_ext(
                                 local_node[depth] = child;
                                 local_pos[depth] = 0;
                             }
-                            mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+
+                            #if defined(__opencl_c_atomic_order_seq_cst) && defined(__opencl_c_atomic_scope_device)
+                                atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE,memory_order_seq_cst,memory_scope_device);
+                            #else
+                                mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+                            #endif
                         }
                     } else {
                         depth = max(j, depth - 1);

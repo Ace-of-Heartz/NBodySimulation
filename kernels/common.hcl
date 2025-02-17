@@ -1,9 +1,10 @@
 #ifndef COMMON_HCL
 #define COMMON_HCL
 
-#pragma OPENCL EXTENSION cl_khr_global_int32_base_atomics : enable
-#pragma OPENCL EXTENSION cl_khr_global_int32_extended_atomics : enable
-#pragma OPENCL EXTENSION cl_khr_local_int32_base_atomics : enable
+
+//#pragma OPENCL EXTENSION cl_khr_global_int32_base_atomics : enable
+//#pragma OPENCL EXTENSION cl_khr_global_int32_extended_atomics : enable
+//#pragma OPENCL EXTENSION cl_khr_local_int32_base_atomics : enable
 
 
 #define LOCKED -2
@@ -24,5 +25,16 @@ typedef enum NumericalMethod{
     Euler = 2
 } NumericalMethod;
 
+/*
+Used extensions:
+    atomic_work_item_fence(...):
+    __opencl_c_atomic_order_seq_cst
+    __opencl_c_atomic_scope_device
+
+    atomic_load_explicit(...) and atomic_store_explicit(...)
+    __opencl_c_generic_address_space
+*/
 
 #endif
+
+

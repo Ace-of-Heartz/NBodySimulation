@@ -63,9 +63,13 @@ __kernel void saturate_tree(
                     }
 
                     localChild[ WORKGROUP_SIZE * missing + l_id] = child; // Cache children,
-
-                    mass_idx = atomic_load_explicit(&mass[child],memory_order_seq_cst,memory_scope_device);
-
+                    #if defined(__opencl_c_generic_address_space)
+                        DEBUG_PRINT(("Using 2.0 feature"));
+                        mass_idx = atomic_load_explicit(&mass[child],memory_order_seq_cst,memory_scope_device);
+                    #else
+                        DEBUG_PRINT(("Using old feature"));
+                        mass_idx = mass[child];
+                    #endif
 //                    DEBUG_PRINT(("\t\t\t\t[%d] Mass of Child: %f\n",g_id,mass_idx));
 
                     ++missing;
@@ -76,9 +80,11 @@ __kernel void saturate_tree(
                         --missing;
                         if (child >= num_of_bodies){ // Child is a node
 //                            DEBUG_PRINT(("\t\t\t\t[%d] Node Body Count BEFORE: %d\n",g_id,node_body_count));
-
-                            node_body_count += atomic_load_explicit(&body_count[child],memory_order_seq_cst,memory_scope_device) - 1;
-
+                            #if defined(__opencl_c_generic_address_space)
+                                node_body_count += atomic_load_explicit(&body_count[child],memory_order_seq_cst,memory_scope_device) - 1;
+                            #else
+                                node_body_count += body_count[child];
+                            #endif
 //                            DEBUG_PRINT(("\t\t\t\t[%d] Node Body Count AFTER: %d\n",g_id,node_body_count));
                         }
                         node_mass += mass_idx;
@@ -89,7 +95,13 @@ __kernel void saturate_tree(
                     ++used_child_idx;
                 }
             }
-            mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+
+            #if defined(__opencl_c_atomic_order_seq_cst) && defined(__opencl_c_atomic_scope_device)
+                atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE,memory_order_seq_cst,memory_scope_device);
+            #else
+                mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+            #endif
+
             node_body_count += used_child_idx; // += "Number of existing nodes/bodies"
         }
 
@@ -99,13 +111,21 @@ __kernel void saturate_tree(
                 int child = localChild[(missing - 1) * WORKGROUP_SIZE + l_id]; // Because of the previous code block, this will yield the missing child
                 // Missing > 0, therefore the child that gets cached here is guaranteed to be missing!
 
-                mass_idx = atomic_load_explicit(&mass[child],memory_order_seq_cst,memory_scope_device);
+                #if defined(__opencl_c_generic_address_space)
+                    mass_idx = atomic_load_explicit(&mass[child],memory_order_seq_cst,memory_scope_device);
+                #else
+                    mass_idx += mass[child];
+                #endif
 
                 if (mass_idx >= 0.0f){ // Node
                     --missing;
 
                     if (child >= num_of_bodies){
-                        node_body_count += atomic_load_explicit(&body_count[child],memory_order_seq_cst,memory_scope_device) - 1;
+                        #if defined(__opencl_c_generic_address_space)
+                            node_body_count += atomic_load_explicit(&body_count[child],memory_order_seq_cst,memory_scope_device) - 1;
+                        #else
+                            node_body_count += body_count[child];
+                        #endif
                     }
 
                      node_mass += mass_idx;
@@ -126,9 +146,11 @@ __kernel void saturate_tree(
         if (missing == 0){ // If no failure happened, continue
 //            DEBUG_PRINT(("[%d]\tMissing is zero\n\tNode Index: %d\n\tNode Mass: %f\n\tNode center of mass: (%f,%f,%f)\n",g_id,node_idx,node_mass,node_center.x,node_center.y,node_center.z));
 
-
-            atomic_store_explicit(&body_count[node_idx],node_body_count,memory_order_seq_cst,memory_scope_device); // Necessary for later sorting only!
-
+            #if defined(__opencl_c_generic_address_space)
+                atomic_store_explicit(&body_count[node_idx],node_body_count,memory_order_seq_cst,memory_scope_device); // Necessary for later sorting only!
+            #else
+                body_count[node_idx] = node_body_count;
+            #endif
 
             mass_idx = 1.0f / node_mass;
 
@@ -136,15 +158,23 @@ __kernel void saturate_tree(
             positions[node_idx * 3 + 1] = node_center.y * mass_idx;
             positions[node_idx * 3 + 2] = node_center.z * mass_idx;
 
-            atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE, memory_order_seq_cst,memory_scope_device);
-            atomic_store_explicit(&(mass[node_idx]),node_mass,memory_order_seq_cst,memory_scope_device);
+            #if defined(__opencl_c_atomic_order_seq_cst) && defined(__opencl_c_atomic_scope_device)
+                atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE, memory_order_seq_cst,memory_scope_device);
+            #else
+                mem_fence(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE)
+            #endif
 
-//            DEBUG_PRINT(("\t\tNext node: %d\n",node_idx));
+            #if defined(__opencl_c_generic_address_space)
+                atomic_store_explicit(&(mass[node_idx]),node_mass,memory_order_seq_cst,memory_scope_device);
+            #else
+                mass[node_idx] = node_mass;
+            #endif
+            DEBUG_PRINT(("\t\tNext node: %d\n",node_idx));
 
             node_idx += step_size; // Continue with next cell
             // If a thread fails with a node, it continues trying to get all missing childrne in the next loop
         }
-//        DEBUG_PRINT(("\t\tNext node: %d\n\tMissing: %d",node_idx,missing));
+        DEBUG_PRINT(("\t\tNext node: %d\n\tMissing: %d",node_idx,missing));
 
     }
 }
@@ -207,9 +237,11 @@ __kernel void saturate_tree_ext(
                     }
 
                     localChild[ WORKGROUP_SIZE * missing + l_id] = child; // Cache children,
-
-                    mass_idx = atomic_load_explicit(&mass[child],memory_order_seq_cst,memory_scope_device);
-
+                    #if defined(__opencl_c_generic_address_space)
+                        mass_idx = atomic_load_explicit(&mass[child],memory_order_seq_cst,memory_scope_device);
+                    #else
+                        mass_idx += mass[child];
+                    #endif
 //                    DEBUG_PRINT(("\t\t\t\t[%d] Mass of Child: %f\n",g_id,mass_idx));
 
                     ++missing;
@@ -220,9 +252,11 @@ __kernel void saturate_tree_ext(
                         --missing;
                         if (child >= num_of_bodies){ // Child is a node
 //                            DEBUG_PRINT(("\t\t\t\t[%d] Node Body Count BEFORE: %d\n",g_id,node_body_count));
-
-                            node_body_count += atomic_load_explicit(&body_count[child],memory_order_seq_cst,memory_scope_device) - 1;
-
+                            #if defined(__opencl_c_generic_address_space)
+                                node_body_count += atomic_load_explicit(&body_count[child],memory_order_seq_cst,memory_scope_device) - 1;
+                            #else
+                                node_body_count += body_count[child];
+                            #endif
 //                            DEBUG_PRINT(("\t\t\t\t[%d] Node Body Count AFTER: %d\n",g_id,node_body_count));
                         }
 
@@ -236,7 +270,12 @@ __kernel void saturate_tree_ext(
 
                         for (int i = 0; i < max_loop && children[child * NUMBER_OF_CELLS + i] >= 0; ++i){
                             int c_idx = children[child * NUMBER_OF_CELLS + i];
-                            mass_idx = atomic_load_explicit(&mass[c_idx],memory_order_seq_cst,memory_scope_device);
+
+                            #if defined(__opencl_c_generic_address_space)
+                                mass_idx = atomic_load_explicit(&mass[c_idx],memory_order_seq_cst,memory_scope_device);
+                            #else
+                                mass_idx = mass[c_idx];
+                            #endif
                             node_mass += mass_idx;
                             node_center.x += positions[c_idx * 3 + 0] * mass_idx;
                             node_center.y += positions[c_idx * 3 + 1] * mass_idx;
@@ -247,7 +286,12 @@ __kernel void saturate_tree_ext(
                     ++used_child_idx;
                 }
             }
-            mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+            #if defined(__opencl_c_atomic_order_seq_cst) && defined(__opencl_c_atomic_scope_device)
+                atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE, memory_order_seq_cst,memory_scope_device);
+            #else
+                mem_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE);
+            #endif
+
             node_body_count += used_child_idx; // += "Number of existing nodes/bodies"
         }
 
@@ -257,13 +301,21 @@ __kernel void saturate_tree_ext(
                 int child = localChild[(missing - 1) * WORKGROUP_SIZE + l_id]; // Because of the previous code block, this will yield the missing child
                 // Missing > 0, therefore the child that gets cached here is guaranteed to be missing!
 
-                mass_idx = atomic_load_explicit(&mass[child],memory_order_seq_cst,memory_scope_device);
+                #if defined(__opencl_c_generic_address_space)
+                    mass_idx = atomic_load_explicit(&mass[child],memory_order_seq_cst,memory_scope_device);
+                #else
+                    mass_idx = mass[child];
+                #endif
 
                 if (mass_idx >= 0.0f){ // Node
                     --missing;
 
                     if (child >= num_of_bodies){
-                        node_body_count += atomic_load_explicit(&body_count[child],memory_order_seq_cst,memory_scope_device) - 1;
+                         #if defined(__opencl_c_generic_address_space)
+                            node_body_count += atomic_load_explicit(&body_count[child],memory_order_seq_cst,memory_scope_device) - 1;
+                        #else
+                            node_body_count += body_count[child];
+                        #endif
                     }
 
                     node_mass += mass_idx;
@@ -284,9 +336,11 @@ __kernel void saturate_tree_ext(
         if (missing == 0){ // If no failure happened, continue
 //            DEBUG_PRINT(("[%d]\tMissing is zero\n\tNode Index: %d\n\tNode Mass: %f\n\tNode center of mass: (%f,%f,%f)\n",g_id,node_idx,node_mass,node_center.x,node_center.y,node_center.z));
 
-
-            atomic_store_explicit(&body_count[node_idx],node_body_count,memory_order_seq_cst,memory_scope_device); // Necessary for later sorting only!
-
+             #if defined(__opencl_c_generic_address_space)
+                atomic_store_explicit(&body_count[node_idx],node_body_count,memory_order_seq_cst,memory_scope_device); // Necessary for later sorting only!
+             #else
+                body_count[node_idx] = node_body_count;
+             #endif
 
             mass_idx = 1.0f / node_mass;
 
@@ -294,8 +348,17 @@ __kernel void saturate_tree_ext(
             positions[node_idx * 3 + 1] = node_center.y * mass_idx;
             positions[node_idx * 3 + 2] = node_center.z * mass_idx;
 
-            atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE, memory_order_seq_cst,memory_scope_device);
-            atomic_store_explicit(&(mass[node_idx]),node_mass,memory_order_seq_cst,memory_scope_device);
+            #if defined(__opencl_c_atomic_order_seq_cst) && defined(__opencl_c_atomic_scope_device)
+                atomic_work_item_fence(CLK_GLOBAL_MEM_FENCE | CLK_LOCAL_MEM_FENCE, memory_order_seq_cst,memory_scope_device);
+            #else
+                mem_fence(CLK_LOCAL_MEM_FENCE | CLK_GLOBAL_MEM_FENCE)
+            #endif
+
+            #if defined(__opencl_c_generic_address_space)
+                atomic_store_explicit(&(mass[node_idx]),node_mass,memory_order_seq_cst,memory_scope_device);
+            #else
+                mass[node_idx] = node_mass;
+            #endif
 
 //            DEBUG_PRINT(("\t\tNext node: %d\n",node_idx));
 
