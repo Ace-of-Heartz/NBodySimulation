@@ -14,7 +14,7 @@ __kernel void sort(
 {
     int step_size = get_global_size(0);
 
-    int cell = num_of_bodies + num_of_nodes + 1 - step_size + get_global_id(0);
+    int cell =  num_of_bodies + num_of_nodes - step_size + get_global_id(0);
 
     while (cell >= *bottom){
         int cell_start = atomic_load_explicit(&start[cell],memory_order_acquire,memory_scope_device);
@@ -93,9 +93,9 @@ __kernel void sort_ext(
 
                     ++cell_start;
 
-                    for (int i = 0; i < LEAF_CAP && children[child * NUMBER_OF_CELLS + i] >= 0; ++i){
+                    for (int i = 0; i < LEAF_CAP && children[child * LEAF_CAP + i] >= 0; ++i){
 
-                        sorted[cell_start] = children[child * NUMBER_OF_CELLS + i];
+                        sorted[cell_start] = children[child * LEAF_CAP + i];
                         ++cell_start;
                     }
                 }
@@ -103,5 +103,7 @@ __kernel void sort_ext(
 
             cell -= step_size;
         }
+
+        barrier(CLK_GLOBAL_MEM_FENCE);
     }
 }
