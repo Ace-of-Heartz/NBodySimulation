@@ -1,6 +1,7 @@
 #include "MyApp.h"
 #include "SDL_GLDebugMessageCallback.h"
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <imgui.h>
 
@@ -13,7 +14,7 @@
 
 #include "oclutils.hpp"
 #include "ImGuiWidgets.h"
-
+#include "KernelLogger.h"
 
 
 void CMyApp::SetupDebugCallback()
@@ -277,6 +278,7 @@ bool CMyApp::SetKernelArgs()
 	kernel_init.setArg(8,max_children);
 	kernel_init.setArg(9,cl_body_depth_buffer);
 	kernel_init.setArg(10,cl_start);
+	kernel_init.setArg(11,cl_max_depth);
 
 	kernel_update.setArg(0, cl_v);
 	kernel_update.setArg(1, cl_p);
@@ -657,6 +659,8 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 	kernel_calculate_force.setArg(10, delta_time);
 	kernel_calculate_force_ext.setArg(10, delta_time);
 
+	static int interval = 0;
+
 	std::vector<int> child_vec(max_children,-1);
 	// CL
 	try {
@@ -671,30 +675,96 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 
 			switch (sim.GetConfig().GetAlgorithmConfig())
 			{
-				case BARNES_HUT: {
-					cl::NDRange global((std::ceil((float)(sim.GetConfig().GetNumberOfBodies()) / (float)(workgroup_size))) * workgroup_size );
-					command_queue.enqueueNDRangeKernel(kernel_hybrid_reduce_root,cl::NullRange,workgroup_size*workgroup_size,workgroup_size);
-					command_queue.enqueueNDRangeKernel(kernel_parallel_reduce_root,cl::NullRange,workgroup_size,workgroup_size);
+				case BARNES_HUT:
+					{
+						cl::NDRange global((std::ceil((float)(sim.GetConfig().GetNumberOfBodies()) / (float)(workgroup_size))) * workgroup_size );
+						cl::NDRange local(workgroup_size);
 
-					command_queue.enqueueNDRangeKernel(kernel_init,cl::NullRange,global,workgroup_size);
+						command_queue.enqueueNDRangeKernel(kernel_hybrid_reduce_root,cl::NullRange,workgroup_size*workgroup_size,local);
+						command_queue.enqueueNDRangeKernel(kernel_parallel_reduce_root,cl::NullRange,workgroup_size,local);
 
-					// command_queue.enqueueNDRangeKernel(kernel_build_tree,cl::NullRange,global,workgroup_size);
-					command_queue.enqueueNDRangeKernel(kernel_build_tree_ext,cl::NullRange,global,workgroup_size);
+						command_queue.enqueueNDRangeKernel(kernel_init,cl::NullRange,global,local);
+
+						if (log_updates && update_id % (2 << interval) == 0)
+						{
+							KernelLogger::OpenLogFile(std::format("../simlogs/build_tree_{}.oclsim",update_id));
+							KernelLogger::LogKernel("build_tree.cl","build_tree_ext",
+													(cl_ulong3){global.get()[0],global.get()[1],global.get()[2]},
+													(cl_ulong3){local.get()[0],local.get()[1],local.get()[2]});
+							KernelLogger::LogKernelParam<float>(cl_p,command_queue,(num_of_nodes + sim.GetConfig().GetNumberOfBodies() + 1),3,sizeof(float),
+								[&](const int i, const int per,float* items) {return std::format("{} {} {} ",items[i * per],items[i * per + 1],items[i * per + 2]);}
+							);
+							KernelLogger::LogKernelParam<float>(cl_m,command_queue,num_of_nodes + sim.GetConfig().GetNumberOfBodies() + 1,1,sizeof(float),
+								[&](const int i,const int per, float* items) {return std::format("{} ",items[i]);}
+							);
+							KernelLogger::LogKernelParam<float>(cl_boundary,command_queue,2,3,sizeof(float),
+								[&](const int i,const int per, float* items) {return std::format("{} {} {} ",items[i*per],items[i*per + 1],items[i*per + 2]);});
+
+							KernelLogger::LogKernelParam<int>(cl_children, command_queue, (num_of_nodes + sim.GetConfig().GetNumberOfBodies() + 1),8,sizeof(int),
+								[&](const int i ,const int per, int* items)
+								{
+									return std::format("{} {} {} {} {} {} {} {} ",items[i * per],items[i * per + 1],items[i * per + 2],items[i * per + 3],items[i * per + 4],items[i * per + 5],items[i * per + 6],items[i * per + 7]);
+								});
+
+							KernelLogger::LogKernelParam<int>(cl_max_depth, command_queue,1,1,sizeof(int),
+								[&](const int i, const int per,int* items)
+								{
+									return std::format("{} ",items[i * per]);
+								}
+							);
+
+							KernelLogger::LogKernelParam<int>(max_children);
+							KernelLogger::LogKernelParam<int>(sim.GetConfig().GetNumberOfBodies());
+							KernelLogger::LogKernelParam<int>(num_of_nodes);
+
+							KernelLogger::LogKernelParam<int>(cl_bottom,command_queue,1,1,sizeof(int),
+								[&] (const int i, const int per, int* items)
+								{
+									return std::format("{} ", items[i * per]);
+								}
+							);
+
+							KernelLogger::LogKernelParam<int>(cl_errors,command_queue,sim.GetConfig().GetNumberOfBodies(),1,sizeof(int),
+								[&] (const int i, const int per, int* errors)
+								{
+									return std::format("{} ", errors[i * per]);
+								}
+							);
+
+							KernelLogger::LogKernelParam<int>(cl_body_depth_buffer,command_queue,sim.GetConfig().GetNumberOfBodies(),1,sizeof(int),
+								[&] (const int i, const int per, int* depths)
+								{
+									return std::format("{} ", depths[i * per]);
+								}
+							);
+
+							KernelLogger::LogKernelParam<int>(cl_start,command_queue,sim.GetConfig().GetNumberOfBodies() + 1 + num_of_nodes,1,sizeof(int),
+								[&] (const int i, const int per, int* items)
+								{
+									return std::format("{} ", items[i * per]);
+								});
+							KernelLogger::CloseLogFile();
+							++interval;
+						}
+						// command_queue.enqueueNDRangeKernel(kernel_build_tree,cl::NullRange,global,workgroup_size);
+
+
+					command_queue.enqueueNDRangeKernel(kernel_build_tree_ext,cl::NullRange,global,local);
 
 					// command_queue.enqueueNDRangeKernel(kernel_saturate_tree,cl::NullRange,global,workgroup_size);
-					command_queue.enqueueNDRangeKernel(kernel_saturate_tree_ext,cl::NullRange,global,workgroup_size);
+					command_queue.enqueueNDRangeKernel(kernel_saturate_tree_ext,cl::NullRange,global,local);
 
 					// command_queue.enqueueNDRangeKernel(kernel_sort,cl::NullRange,global,workgroup_size);
-					command_queue.enqueueNDRangeKernel(kernel_sort_ext,cl::NullRange,global,workgroup_size);
+					command_queue.enqueueNDRangeKernel(kernel_sort_ext,cl::NullRange,global,local);
 
 					// command_queue.enqueueNDRangeKernel(kernel_calculate_force,cl::NullRange,global,workgroup_size);
-					command_queue.enqueueNDRangeKernel(kernel_calculate_force_ext,cl::NullRange,global,workgroup_size);
+					// command_queue.enqueueNDRangeKernel(kernel_calculate_force_ext,cl::NullRange,global,local);
 
 					if (sim.GetConfig().GetCollision())
 					{
-						command_queue.enqueueNDRangeKernel(kernel_collision,cl::NullRange,global,workgroup_size);
+						command_queue.enqueueNDRangeKernel(kernel_collision,cl::NullRange,global,local);
 					}
-					command_queue.enqueueNDRangeKernel(kernel_copy,cl::NullRange,global,workgroup_size);
+					// command_queue.enqueueNDRangeKernel(kernel_copy,cl::NullRange,global,local);
 					command_queue.enqueueBarrierWithWaitList();
 
 				} break;
@@ -734,13 +804,9 @@ void CMyApp::Update(const SUpdateInfo& update_info)
 
 			}
 
-			static int interval = 0;
+
 			// Wait for all computations to finish
-			if (log_updates && update_id % (2 << interval) == 0)
-			{
-				interval++;
-				LogState();
-			}
+
 
 			command_queue.finish();
 
@@ -780,7 +846,7 @@ void CMyApp::LogState()
 		log_file << "Error occured!" << std::endl;
 	}
 
-	LogChildrenBuffer();
+	// LogChildrenBuffer();
 	// LogPositionBuffer();
 	// LogMassBuffer();
 	// LogDepthBuffer();
